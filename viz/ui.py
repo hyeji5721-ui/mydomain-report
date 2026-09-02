@@ -11,7 +11,8 @@ import streamlit as st
 from core import config as C
 
 STATUS_MARK = {"ok": "●", "warn": "▲", "block": "✕", "none": "○"}
-STATUS_TEXT = {"ok": "정상", "warn": "주의", "block": "차단", "none": "없음"}
+STATUS_TEXT = {"ok": "정상", "warn": "주의", "block": "차단",
+               "none": "판정 없음"}   # 임계값이 없어 판정하지 않았다는 뜻
 
 
 def css() -> None:

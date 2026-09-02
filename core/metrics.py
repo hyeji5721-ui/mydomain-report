@@ -319,11 +319,15 @@ def status_of(name: str, value: float) -> str:
     """지표 값을 상태 색으로 판정한다. 임계값은 config.THRESHOLDS 에 있다.
 
     이 함수는 **그대로 쓴다.** 판정 규칙이지 도메인이 아니다.
-    THRESHOLDS 가 비어 있으면 전부 "ok"로 나온다 — 채우면 색이 갈린다.
+
+    임계값이 없는 지표는 **"none"(회색 · 판정 없음)** 이다. "ok"(초록 정상)로
+    두면 판정한 적 없는 것을 통과했다고 주장하는 화면이 된다 — 읽는 사람은
+    초록을 보고 "괜찮은 수준"으로 받아들인다. 근거 없는 임계값을 지어내지
+    않는 대신, 판정하지 않았다는 사실을 색으로 드러낸다.
     """
     th = C.THRESHOLDS.get(name)
     if not th:
-        return "ok"
+        return "none"
     # 높을수록 나쁜 지표는 config.HIGHER_IS_WORSE 에 있다. 판정 규칙은
     # 도메인이 아니지만 **어느 지표가 그런지는 도메인**이라 값은 config 가 갖는다.
     if name in C.HIGHER_IS_WORSE:

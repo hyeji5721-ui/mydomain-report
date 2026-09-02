@@ -66,14 +66,13 @@ if m is not None and len(m) >= 2:
     with c2:
         b = st.selectbox("비교 기간", months, index=len(months) - 1)
 
-    # ★ 높을수록 나쁜 지표. metrics.status_of() 와 같은 목록을 쓴다.
-    HIGHER_IS_WORSE = {"이탈", "이탈률", "이탈율", "해지율", "불량률", "반품률"}
+    # 높을수록 나쁜 지표는 config 가 갖는다. 여기 따로 두면 두 목록이 어긋난다.
 
     rows = []
     for col in metric_cols:
         va, vb = m.loc[a, col], m.loc[b, col]
         pct = (vb / va - 1) * 100 if va else 0
-        good = (vb <= va) if col in HIGHER_IS_WORSE else (vb >= va)
+        good = (vb <= va) if col in C.HIGHER_IS_WORSE else (vb >= va)
         rows.append({"지표": col, str(a): f"{va:,.2f}", str(b): f"{vb:,.2f}",
                      "변화": f"{pct:+.1f}%", "판정": "정상" if good else "주의"})
 
