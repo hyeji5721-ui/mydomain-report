@@ -106,23 +106,73 @@ def funnel(fe: pd.DataFrame) -> pd.DataFrame:
 
 
 @st.cache_data(show_spinner=False)
-def funnel_by(fe: pd.DataFrame, se: pd.DataFrame, dim: str,
-              step_from: str, step_to: str) -> pd.DataFrame:
+def funnel_by(t: dict, dim: str, step_from: str, step_to: str) -> pd.DataFrame:
     """차원별 특정 구간 전환율. 평균 하나로는 어디를 고칠지 모른다.
 
-    ★ Day3 실습 B에서 채웁니다.
-
     dim 은 분해 축이다. **무엇으로 쪼갤지는 내가 정한다.**
-    기기·채널·지역·요금제·담당자·유입경로 — 도메인마다 다르다.
 
     쪼개는 기준은 이것이다: 그 축으로 나눴을 때 **손을 쓸 수 있는가.**
     나눠서 격차가 보여도 우리가 못 바꾸는 것이면 분해할 이유가 적다.
 
     반환: DataFrame[<dim>, 도달, 전환, 전환율, 비중]
+
+    ── 내 도메인에서 정한 것 ──────────────────────────────────────
+
+    그레인은 계획안 1건(plan_id). 도달·전환 모두 고유 계획안 수다.
+
+    **인자를 (fe, se, ...) 에서 t(dict) 로 바꿨다.** 축이 서로 다른 테이블에
+    있어 함수가 직접 찾아야 한다 — cycle_year 는 plans 에, division_type 은
+    departments 에 있어 plans.department_id 로 조인해야 붙는다.
+    호출부(2_대시보드 · 3_리포트)도 같이 바꿨다.
+
+    축은 명세에서 정한 둘이다. 세 번째(department_id)는 보류.
+
+        division_type  사업부 9 / 지원부서 6 — 조직 성격
+        cycle_year     2022~2026 — 제출 사이클. 예산삭감연도(2023·2025) 비교용
+
+    cycle_year 로 쪼개면 **시작 시점별 코호트**가 된다. 그때 주의할 것:
+    최근 코호트는 아직 다 갈 시간이 없을 수 있다. 낮은 값이 성과 문제인지
+    중도절단인지는 **미결 건수와 단계별 소요 일수**를 봐야 갈린다.
+    (제출 -> 확정 배포 중앙값 126일 · 90분위 165일)
+
+    표본이 config.MIN_SAMPLE 미만인 그룹은 **빼고 돌려준다.** 비율로 말할 수
+    없는 크기이기 때문이다. 다만 비중은 **빼기 전 전체**를 분모로 계산하므로,
+    비중 합이 1 이 안 되면 빠진 그룹이 있다는 뜻이다.
     """
-    todo("Day3 실습 B", "분해",
-         "무엇으로 쪼갤지 정하십시오. 쪼개서 격차가 보이면 손을 쓸 수 있습니까?",
-         "core/metrics.py  funnel_by()")
+    pl = t["plans"]
+    ev = t["plan_stage_events"].drop_duplicates()
+    ok = ev[ev.result == "통과"]
+
+    # 축 값을 계획안에 붙인다. plans 에 있으면 그대로, 없으면 마스터에서 조인.
+    base = pl[["plan_id", "department_id"]].copy()
+    base["plan_id"] = base.plan_id.astype(str)
+    if dim in pl.columns:
+        base[dim] = pl[dim].astype(str).to_numpy()
+    else:
+        src = next((n for n, d in t.items() if dim in d.columns and n != "plans"), None)
+        if src is None:
+            raise ValueError(
+                f"분해 축 {dim!r} 을 어느 테이블에서도 찾을 수 없습니다. "
+                f"쓸 수 있는 컬럼: "
+                f"{sorted({c for d in t.values() for c in d.columns})}")
+        m = t[src][["department_id", dim]].copy()
+        m[dim] = m[dim].astype(str)
+        base = base.merge(m, on="department_id", how="left")
+        base[dim] = base[dim].fillna("(미상)")
+
+    a = set(ok.loc[ok.stage_name == step_from, "plan_id"].astype(str))
+    b = set(ok.loc[ok.stage_name == step_to, "plan_id"].astype(str))
+    base["_a"] = base.plan_id.isin(a)
+    base["_b"] = base.plan_id.isin(b)
+
+    g = (base.groupby(dim, observed=True)
+             .agg(도달=("_a", "sum"), 전환=("_b", "sum"))
+             .reset_index())
+    total = int(g.도달.sum())                      # 빼기 전 전체가 분모다
+    g = g[g.도달 >= C.MIN_SAMPLE].copy()
+    g["전환율"] = g.전환 / g.도달
+    g["비중"] = g.도달 / total if total else float("nan")
+    return g[[dim, "도달", "전환", "전환율", "비중"]].sort_values(dim)
 
 
 # ── 유지 퍼널 ─────────────────────────────────────────────────────

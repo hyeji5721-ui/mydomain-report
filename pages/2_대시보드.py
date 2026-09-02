@@ -75,13 +75,9 @@ if f is not None:
             "구간", range(len(f) - 1),
             format_func=lambda i: f"{f.label.iloc[i]} → {f.label.iloc[i+1]}",
             index=min(bi - 1, len(f) - 2))
-        # funnel_by() 는 Day3 에 채운다. 지금은 인자가 유효해야 안내 카드가
-        # 뜬다 — 인자는 함수 호출 전에 평가되므로 없는 테이블을 쓰면
-        # guard 가 잡기 전에 KeyError 로 죽는다.
-        # ★ division_type 은 departments 에 있어 plans 와 조인이 한 번 더
-        #   필요하다. 인자 구성은 Day3 에 확정한다.
-        g = ui.guard(M.funnel_by, t["plan_stage_events"], t["plans"], dim,
-                     f.step.iloc[i], f.step.iloc[i + 1])
+        # funnel_by() 는 t 전체를 받는다 — 축이 plans / departments 로
+        # 나뉘어 있어 함수가 직접 찾는다.
+        g = ui.guard(M.funnel_by, t, dim, f.step.iloc[i], f.step.iloc[i + 1])
         if g is not None and len(g):
             st.plotly_chart(charts.device_compare(g), width="stretch",
                             config={"displayModeBar": False})

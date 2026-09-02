@@ -80,8 +80,7 @@ with body:
         if "device" in sec.get("charts", []):
             f = M.funnel(t["plan_stage_events"])
             bi = max(int(f.index[f.is_bottleneck][0]), 1)
-            g = M.funnel_by(t["plan_stage_events"], t["plans"], DIM,
-                            f.step.iloc[bi - 1], f.step.iloc[bi])
+            g = M.funnel_by(t, DIM, f.step.iloc[bi - 1], f.step.iloc[bi])
             st.image(pdf_charts.device_png(g), width="stretch")
         if "experiments" in sec.get("charts", []):
             st.image(pdf_charts.experiments_png(M.experiment_results(t)),
@@ -107,8 +106,7 @@ with c1:
         with st.spinner("차트를 그리고 PDF를 조립하는 중..."):
             f = M.funnel(t["plan_stage_events"])
             bi = max(int(f.index[f.is_bottleneck][0]), 1)
-            g = M.funnel_by(t["plan_stage_events"], t["plans"], DIM,
-                            f.step.iloc[bi - 1], f.step.iloc[bi])
+            g = M.funnel_by(t, DIM, f.step.iloc[bi - 1], f.step.iloc[bi])
             charts = {
                 "funnel": pdf_charts.funnel_png(f),
                 "device": pdf_charts.device_png(g),
