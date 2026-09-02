@@ -66,7 +66,7 @@ BASELINE_ROWS = {
     "plan_stage_events": 3_242,
     "plan_actuals": 347,
 }
-ROW_TOLERANCE = 0.10        # 기준 대비 ±10% 벗어나면 경고
+# 경고 기준(±10%)은 임계값이므로 config.ROW_TOLERANCE 에 있다.
 
 # 계산에 실제로 쓰이는 컬럼만 적는다. 없으면 지표가 빠지거나 계산이 멈춘다.
 # department_name 은 화면 표시용이라 넣지 않았다 — 없어도 계산은 된다.
@@ -131,7 +131,7 @@ def run_checks(t: dict) -> list[dict]:
         base = BASELINE_ROWS.get(name)
         if n < C.MIN_SAMPLE:
             too_small.append(f"{name} {n:,}행")
-        elif base and abs(n - base) / base > ROW_TOLERANCE:
+        elif base and abs(n - base) / base > C.ROW_TOLERANCE:
             drifted.append(f"{name} {n:,}행 (기준 {base:,}, {(n-base)/base*100:+.1f}%)")
 
     if too_small:
@@ -142,7 +142,7 @@ def run_checks(t: dict) -> list[dict]:
                       "이보다 적으면 지표를 계산하지 않기로 정했습니다."))
     elif drifted:
         out.append(_r("행 수", "warn",
-                      f"기준 행 수와 ±{ROW_TOLERANCE*100:.0f}% 이상 다른 테이블이 "
+                      f"기준 행 수와 ±{C.ROW_TOLERANCE*100:.0f}% 이상 다른 테이블이 "
                       f"{len(drifted)}개 있습니다: " + ", ".join(drifted),
                       "데이터가 갱신되면 늘어나는 것이 정상입니다. "
                       "줄어들었다면 적재가 빠졌는지 확인하십시오."))
@@ -150,7 +150,7 @@ def run_checks(t: dict) -> list[dict]:
         out.append(_r("행 수", "ok",
                       " · ".join(f"{k} {len(v):,}행" for k, v in t.items()),
                       f"전부 최소 표본 {C.MIN_SAMPLE}행 이상이고 "
-                      f"기준 대비 ±{ROW_TOLERANCE*100:.0f}% 안에 있습니다"))
+                      f"기준 대비 ±{C.ROW_TOLERANCE*100:.0f}% 안에 있습니다"))
 
     # ── 규칙 2. 필수 컬럼 ─────────────────────────────────────────
     # block  없으면 계산이 KeyError 로 멈추거나, 그 컬럼을 쓰는 지표가

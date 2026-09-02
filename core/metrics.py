@@ -126,6 +126,17 @@ def funnel_by(fe: pd.DataFrame, se: pd.DataFrame, dim: str,
 
 
 # ── 유지 퍼널 ─────────────────────────────────────────────────────
+# 단계 이름 -> 그 단계에 해당하는 plan_id 를 돌려주는 판정식.
+# **순서와 이름은 config.RETENTION_STEPS 가 정한다.** 여기는 판정식만 갖는다.
+# 단계의 뜻을 바꿀 때는 두 곳을 같이 고쳐야 한다 — 이름만 바꾸면 예외가 난다.
+_RETENTION_RULES = {
+    "제출": lambda pl: pl.plan_id,
+    "유지": lambda pl: pl.loc[pl.final_status.isin(["확정배포", "확정배포대기"]),
+                              "plan_id"],
+    "확정배포": lambda pl: pl.loc[pl.final_status == "확정배포", "plan_id"],
+}
+
+
 @st.cache_data(show_spinner=False)
 def retention_funnel(t: dict) -> pd.DataFrame:
     """유지 퍼널. config.RETENTION_STEPS 의 단계대로 센다.
@@ -152,11 +163,49 @@ def retention_funnel(t: dict) -> pd.DataFrame:
     7주차 토요일에 겪은 생존 편향이 여기서 다시 나온다.
 
     반환: DataFrame[step, label, n, step_rate, cum_rate]
+
+    ── 내 도메인에서 정한 것 ──────────────────────────────────────
+
+    그레인   **계획안 1건** (plan_id). 획득 퍼널과 같다.
+             유지 퍼널이 흔히 「대상 × 기간」인 것과 달리, 이 도메인은
+             계획안 하나가 한 사이클에 한 번 결말을 맞아 기간 축이 없다.
+
+    원천     plans. 세 단계 모두 final_status 하나로 갈린다.
+
+    기간     **전체 한 덩어리** (2022~2026 누적).
+             연도별로 확정률이 68.5%~81.2% 로 12.7%p 벌어지고,
+             예산삭감연도(2023·2025) 평균 69.0% vs 그 외 79.2% 로 10.2%p
+             차이가 있다. **전체 74.9% 는 그 사이 어디에도 실재하지 않는다.**
+             반환 형식(3행)이 연도 축을 담지 못해 지금은 누적으로 둔다 —
+             **Day3 분해에서 cycle_year 로 다시 쪼갠다.**
+
+    이탈     철회 + 반려종결 145건은 **단계로 넣지 않았다.** 유지의 여집합이라
+             앞 단계를 거친 부분집합이 아니다. 590 - 445 로 읽는다.
+
+    단계 정의는 config.RETENTION_STEPS 가 순서와 이름을, 아래 _RETENTION_RULES
+    가 판정식을 갖는다. **둘의 이름이 어긋나면 예외를 올린다** — 조용히 빠지면
+    단계 하나가 사라진 채로 퍼널이 그려진다.
     """
-    todo("Day2 실습 D", "유지 퍼널",
-         "7주차에 정한 유지·이탈의 정의를 config.RETENTION_STEPS 에 옮기고 "
-         "그레인을 다시 확인하십시오.",
-         "core/metrics.py  retention_funnel()")
+    pl = t["plans"]
+
+    unknown = [n for n, _ in C.RETENTION_STEPS if n not in _RETENTION_RULES]
+    if unknown:
+        raise ValueError(
+            f"config.RETENTION_STEPS 의 단계 중 판정식이 없는 것: {unknown}. "
+            f"metrics._RETENTION_RULES 에 추가하십시오. "
+            f"현재 판정식이 있는 단계: {sorted(_RETENTION_RULES)}")
+
+    rows = []
+    for name, _desc in C.RETENTION_STEPS:
+        ids = _RETENTION_RULES[name](pl)
+        rows.append({"step": name, "label": name, "n": int(ids.nunique())})
+    r = pd.DataFrame(rows)
+
+    first = r.n.iloc[0]
+    prev = r.n.shift(1)
+    r["step_rate"] = r.n / prev                      # 첫 단계는 NA
+    r["cum_rate"] = r.n / first if first else float("nan")
+    return r[["step", "label", "n", "step_rate", "cum_rate"]]
 
 
 # ── KPI ───────────────────────────────────────────────────────────
@@ -176,19 +225,49 @@ def kpis(t: dict) -> dict:
     반환: {"지표이름": {"value": float, "unit": str, "fmt": str}}
           fmt 은 화면 표시 형식이다. 예) "{:.2f}%"  "{:,.0f}원"
 
-    예시 — 통신사:
+    ── 내 도메인에서 정한 것 ──────────────────────────────────────
 
-        f = funnel(t["funnel_events"])
-        return {
-            "전환율": {"value": f.n.iloc[-1] / f.n.iloc[0] * 100,
-                       "unit": "%", "fmt": "{:.2f}%"},
-            "ARPU": {"value": float(t["usage_monthly"].billing_amount.mean()),
-                     "unit": "원", "fmt": "{:,.0f}원"},
-        }
+    **3개다.** 카드 칸은 4개지만 넷째는 비운다. 화면이 zip 으로 물리므로
+    5개를 만들면 마지막이 조용히 잘리고, 근거 없는 지표로 칸을 채우면
+    임계값이 없어 **초록 "정상"으로 오독된다.**
+
+        전체 통과율      주지표(명세 3행). final_status == "확정배포" 비율
+        계획-실적 괴리율  가드레일(명세 3행). variance_pct 의 **평균**
+        유지율           명세 5행. 확정배포 + 확정배포대기 비율
+
+    지표 이름은 config.THRESHOLDS 의 키와 **글자까지 같아야** 색이 갈리고,
+    monthly() 의 열 이름과도 같아야 스파크라인이 그려진다.
+
+    **재도전율은 넣지 않았다.** 임계값 근거가 없고, THRESHOLDS 에 없는 지표는
+    status_of() 가 "ok"(초록 정상)를 돌려준다 — 판정하지 않은 것을 통과했다고
+    주장하는 화면이 된다. 재도전율의 격차(코호트별 46.5~72.7%)는 Day3 분해에서 본다.
+
+    ── 괴리율을 평균으로 잡은 이유 ────────────────────────────────
+
+        1. 위험선 16.76 이 「예산삭감연도 **평균**」에서 나왔다. 중앙값을 쓰면
+           통계량이 다른 것을 기준선과 비교하게 된다
+        2. 분포가 오른쪽으로 치우쳐 있다 (min 0.02 · 중앙 10.28 · 평균 13.30 ·
+           max 64.32). 가드레일이 잡아야 하는 것이 그 꼬리다
+        3. 코호트 12개 판정이 평균 ok 4/warn 6/block 2, 중앙값 ok 6/warn 4/block 2.
+           놓치는 쪽이 위험한 지표라 민감한 편이 맞다
+
+    **주의 — 전 기간 한 값으로는 판정에 정보가 없다.** 경고선 10.28 이 이 데이터의
+    중앙값이라, 치우친 분포의 평균(13.30)은 구조적으로 그것을 넘는다. 카드는
+    처음부터 경고로 뜬다. 이 임계값이 일하는 곳은 코호트·부서처럼 쪼갠 단위다.
     """
-    todo("Day2 실습 E", "지표 카드",
-         "내 데이터에서 금액·이탈에 해당하는 컬럼이 무엇입니까? 없는 지표는 빼십시오.",
-         "core/metrics.py  kpis()")
+    pl, ac = t["plans"], t["plan_actuals"]
+    keep = ["확정배포", "확정배포대기"]
+    return {
+        "전체 통과율": {
+            "value": float(pl.final_status.eq("확정배포").mean() * 100),
+            "unit": "%", "fmt": "{:.2f}%"},
+        "계획-실적 괴리율": {
+            "value": float(ac.variance_pct.mean()),
+            "unit": "%p", "fmt": "{:.2f}%p"},
+        "유지율": {
+            "value": float(pl.final_status.isin(keep).mean() * 100),
+            "unit": "%", "fmt": "{:.2f}%"},
+    }
 
 
 @st.cache_data(show_spinner=False)
@@ -201,10 +280,39 @@ def monthly(t: dict) -> pd.DataFrame:
     기간이 짧아 월별로 나눌 수 없으면 주별로 해도 되고, 아예 빼도 된다.
 
     반환: 인덱스가 기간(예 "2025-01"), 열이 지표인 DataFrame
+
+    ── 내 도메인에서 정한 것 ──────────────────────────────────────
+
+    기간은 **제출월 코호트**(submitted_date)로 자른다. 이벤트 발생월이 아니다 —
+    같은 계획안의 여러 단계 이벤트가 다른 달에 흩어져 코호트 해석이 안 된다.
+
+    코호트는 **15개**다. 연도별 1~3월뿐이고 4~12월은 제출이 0건이다.
+    **값이 0% 인 것이 아니라 표본이 없다** — 그래서 행 자체가 없다.
+    코호트별 제출은 17~55건으로 최소 표본 12건을 전부 넘는다.
+
+    ★ 괴리율은 2026 코호트 3개에서 **결측**이다. plan_actuals 에 2026년 건이
+      0/117 이다 — 실적 대조 기간이 아직 안 지났다. **0 으로 채우지 않는다.**
+      0 은 "괴리가 없었다"로 읽히는데 실제로는 "아직 알 수 없다"다.
+      코호트별 괴리 표본은 12~42건이라 2024-03(12건)이 최소 표본에 딱 걸친다.
     """
-    todo("Day2 실습 E", "기간별 추이",
-         "기간을 무엇으로 자릅니까? 월이 너무 길면 주로 자르십시오.",
-         "core/metrics.py  monthly()")
+    pl, ac = t["plans"], t["plan_actuals"]
+    keep = ["확정배포", "확정배포대기"]
+
+    # category dtype 끼리 조인하면 카테고리가 어긋날 수 있어 문자열로 맞춘다.
+    d = pl.assign(
+        기간=to_dt(pl.submitted_date).dt.strftime("%Y-%m"),
+        _pid=pl.plan_id.astype(str),
+        _status=pl.final_status.astype(str))
+    v = ac.assign(_pid=ac.plan_id.astype(str))[["_pid", "variance_pct"]]
+    d = d.merge(v, on="_pid", how="left")          # 실적 없는 건은 NaN 으로 남는다
+
+    g = d.groupby("기간", sort=True)
+    out = pd.DataFrame({
+        "전체 통과율": g._status.apply(lambda x: (x == "확정배포").mean() * 100),
+        "계획-실적 괴리율": g.variance_pct.mean(),   # NaN 만 있으면 NaN
+        "유지율": g._status.apply(lambda x: x.isin(keep).mean() * 100),
+    })
+    return out
 
 
 def status_of(name: str, value: float) -> str:
@@ -216,10 +324,9 @@ def status_of(name: str, value: float) -> str:
     th = C.THRESHOLDS.get(name)
     if not th:
         return "ok"
-    # ★ 높을수록 나쁜 지표. 내 지표 이름을 넣는다.
-    #   "계획-실적 괴리율"이 가드레일이다. 여기 없으면 판정이 거꾸로 뒤집힌다.
-    higher_is_worse = {"계획-실적 괴리율", "이탈률", "이탈율", "해지율", "불량률", "반품률"}
-    if name in higher_is_worse:
+    # 높을수록 나쁜 지표는 config.HIGHER_IS_WORSE 에 있다. 판정 규칙은
+    # 도메인이 아니지만 **어느 지표가 그런지는 도메인**이라 값은 config 가 갖는다.
+    if name in C.HIGHER_IS_WORSE:
         return ("block" if value > th["위험"]
                 else "warn" if value > th["경고"] else "ok")
     return ("block" if value < th["위험"]
