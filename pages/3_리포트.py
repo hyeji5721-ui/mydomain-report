@@ -26,8 +26,9 @@ if t is None:
     st.stop()
 secs = S.build(t, st.session_state.human)
 
-# ★ 리포트 차트에 쓸 분해 축. 내 데이터의 컬럼명으로 바꾼다.
-DIM = "device"
+# 리포트 차트에 쓸 분해 축. 명세에서 정한 두 축 중 하나를 고정으로 쓴다.
+# (화면은 라디오로 고르지만 리포트는 문서라 축을 하나로 박는다)
+DIM = "division_type"
 
 st.markdown('<div style="font-size:24px;font-weight:800;margin-bottom:16px">'
             '리포트</div>', unsafe_allow_html=True)
@@ -74,12 +75,12 @@ with body:
             st.caption("✓ 인과 단정 표현 검사 통과")
 
         if "funnel" in sec.get("charts", []):
-            f = M.funnel(t["funnel_events"])
+            f = M.funnel(t["plan_stage_events"])
             st.image(pdf_charts.funnel_png(f), width="stretch")
         if "device" in sec.get("charts", []):
-            f = M.funnel(t["funnel_events"])
+            f = M.funnel(t["plan_stage_events"])
             bi = max(int(f.index[f.is_bottleneck][0]), 1)
-            g = M.funnel_by(t["funnel_events"], t["sessions"], DIM,
+            g = M.funnel_by(t["plan_stage_events"], t["plans"], DIM,
                             f.step.iloc[bi - 1], f.step.iloc[bi])
             st.image(pdf_charts.device_png(g), width="stretch")
         if "experiments" in sec.get("charts", []):
@@ -104,9 +105,9 @@ with c1:
     st.markdown("**PDF** — 표지 · 목차 · 차트 포함")
     if st.button("PDF 만들기", type="primary"):
         with st.spinner("차트를 그리고 PDF를 조립하는 중..."):
-            f = M.funnel(t["funnel_events"])
+            f = M.funnel(t["plan_stage_events"])
             bi = max(int(f.index[f.is_bottleneck][0]), 1)
-            g = M.funnel_by(t["funnel_events"], t["sessions"], DIM,
+            g = M.funnel_by(t["plan_stage_events"], t["plans"], DIM,
                             f.step.iloc[bi - 1], f.step.iloc[bi])
             charts = {
                 "funnel": pdf_charts.funnel_png(f),

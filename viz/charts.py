@@ -35,15 +35,15 @@ def funnel_bars(f):
     text = []
     for _, r in f.iterrows():
         if r.step_rate == r.step_rate:
-            text.append(f"{r.n:,}명 · 전 단계의 {r.step_rate*100:.1f}%")
+            text.append(f"{r.n:,}건 · 전 단계의 {r.step_rate*100:.1f}%")
         else:
-            text.append(f"{r.n:,}명")
+            text.append(f"{r.n:,}건")
     fig = go.Figure(go.Bar(
         x=f.n, y=f.label, orientation="h",
         marker=dict(color=colors, line=dict(width=0)),
         text=text, textposition="outside",
         textfont=dict(size=12, color=C.BRAND["muted"]),
-        hovertemplate="%{y}<br>%{x:,}명<extra></extra>",
+        hovertemplate="%{y}<br>%{x:,}건<extra></extra>",
     ))
     fig.update_yaxes(autorange="reversed", showgrid=False,
                      tickfont=dict(size=13))
@@ -59,7 +59,7 @@ def device_compare(g):
     fig = go.Figure(go.Bar(
         x=g.전환율 * 100, y=g[g.columns[0]], orientation="h",
         marker=dict(color=colors, line=dict(width=0)),
-        text=[f"{v*100:.1f}%  ({n:,}명 중 {c:,}명)"
+        text=[f"{v*100:.1f}%  ({n:,}건 중 {c:,}건)"
               for v, n, c in zip(g.전환율, g.도달, g.전환)],
         textposition="outside", textfont=dict(size=12, color=C.BRAND["muted"]),
         hovertemplate="%{y}<br>%{x:.1f}%<extra></extra>",

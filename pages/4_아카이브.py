@@ -88,7 +88,7 @@ if m is not None and len(m) >= 2:
 # ── 재현 ──────────────────────────────────────────────────────────
 ui.section("재현", "같은 입력이면 같은 결과가 나와야 한다")
 if st.button("지금 데이터로 재계산해 비교"):
-    f = ui.guard(M.funnel, t["funnel_events"])
+    f = ui.guard(M.funnel, t["plan_stage_events"])
     k = ui.guard(M.kpis, t)
     if f is not None and k is not None:
         rows = [{"항목": f"{r.label} 도달", "값": f"{r.n:,}"}

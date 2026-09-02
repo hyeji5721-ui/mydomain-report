@@ -84,7 +84,7 @@ def device_png(g) -> bytes:
     ax.set_yticklabels(g[g.columns[0]], fontsize=10)
     ax.set_xlim(0, g.전환율.max() * 148)
     for i, (v, n) in enumerate(zip(g.전환율, g.도달)):
-        ax.text(v * 101, i, f"{v*100:.1f}%   ({n:,}명)", va="center",
+        ax.text(v * 101, i, f"{v*100:.1f}%   ({n:,}건)", va="center",
                 fontsize=9, color=C.BRAND["muted"])
     for s in ("top", "right", "bottom"):
         ax.spines[s].set_visible(False)
