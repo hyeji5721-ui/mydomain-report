@@ -50,7 +50,7 @@ if k:
 
 # ── 획득 퍼널 ─────────────────────────────────────────────────────
 ui.section("획득 퍼널", "그레인을 먼저 확인한다")
-f = ui.guard(M.funnel, t["funnel_events"])
+f = ui.guard(M.funnel, t["plan_stage_events"])
 if f is not None:
     left, right = st.columns([1.15, 1])
     with left:
@@ -65,15 +65,22 @@ if f is not None:
             f"<b>{(1-bn.step_rate)*100:.1f}%가 이탈</b>합니다.")
 
     with right:
-        # ★ Day3 — 분해 축. 내 데이터의 컬럼명으로 바꾼다.
-        DIMS = ["device", "channel"]
+        # 분해 축 — 명세에서 정한 두 축. 세 번째(department_id)는 보류.
+        #   division_type  사업부 9 / 지원부서 6  (departments 에 있음)
+        #   cycle_year     2022~2026, 예산삭감연도 2023·2025 여부
+        DIMS = ["division_type", "cycle_year"]
         dim = st.radio("분해 축", DIMS, horizontal=True,
                        label_visibility="collapsed")
         i = st.selectbox(
             "구간", range(len(f) - 1),
             format_func=lambda i: f"{f.label.iloc[i]} → {f.label.iloc[i+1]}",
             index=min(bi - 1, len(f) - 2))
-        g = ui.guard(M.funnel_by, t["funnel_events"], t["sessions"], dim,
+        # funnel_by() 는 Day3 에 채운다. 지금은 인자가 유효해야 안내 카드가
+        # 뜬다 — 인자는 함수 호출 전에 평가되므로 없는 테이블을 쓰면
+        # guard 가 잡기 전에 KeyError 로 죽는다.
+        # ★ division_type 은 departments 에 있어 plans 와 조인이 한 번 더
+        #   필요하다. 인자 구성은 Day3 에 확정한다.
+        g = ui.guard(M.funnel_by, t["plan_stage_events"], t["plans"], dim,
                      f.step.iloc[i], f.step.iloc[i + 1])
         if g is not None and len(g):
             st.plotly_chart(charts.device_compare(g), width="stretch",
