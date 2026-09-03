@@ -131,17 +131,19 @@ def funnel_by(t: dict, dim: str, step_from: str, step_to: str) -> pd.DataFrame:
         division_type    사업부 9 / 지원부서 6 — 조직 성격
         cycle_year       2022~2026 — 제출 사이클. 예산삭감연도(2023·2025) 비교용
 
-    부서 축은 표본이 가장 얇다. 병목 구간에서 부서당 도달이 30건대이므로
-    MIN_SAMPLE 은 넘지만, 여기서 다시 연도로 쪼개면 한 자리로 떨어진다.
+    부서 축은 표본이 가장 얇다. 병목 구간에서 부서당 도달이 27~45건이라
+    MIN_CELL_SAMPLE(30) 에 못 미치는 칸이 생기고, 여기서 다시 연도로 쪼개면
+    한 자리로 떨어진다 — 75개 조합 중 73개가 미달이다.
 
     cycle_year 로 쪼개면 **시작 시점별 코호트**가 된다. 그때 주의할 것:
     최근 코호트는 아직 다 갈 시간이 없을 수 있다. 낮은 값이 성과 문제인지
     중도절단인지는 **미결 건수와 단계별 소요 일수**를 봐야 갈린다.
     (제출 -> 확정 배포 중앙값 126일 · 90분위 165일)
 
-    표본이 config.MIN_SAMPLE 미만인 그룹은 **빼고 돌려준다.** 비율로 말할 수
-    없는 크기이기 때문이다. 다만 비중은 **빼기 전 전체**를 분모로 계산하므로,
-    비중 합이 1 이 안 되면 빠진 그룹이 있다는 뜻이다.
+    표본이 config.MIN_CELL_SAMPLE 미만인 칸은 **빼고 돌려준다.** 비율로 말할 수
+    없는 크기이기 때문이다. (주지표 기준인 MIN_SAMPLE 과 다른 상수다)
+    다만 비중은 **빼기 전 전체**를 분모로 계산하므로, 비중 합이 1 이 안 되면
+    빠진 칸이 있다는 뜻이다.
     """
     pl = t["plans"]
     ev = t["plan_stage_events"].drop_duplicates()
@@ -173,7 +175,7 @@ def funnel_by(t: dict, dim: str, step_from: str, step_to: str) -> pd.DataFrame:
              .agg(도달=("_a", "sum"), 전환=("_b", "sum"))
              .reset_index())
     total = int(g.도달.sum())                      # 빼기 전 전체가 분모다
-    g = g[g.도달 >= C.MIN_SAMPLE].copy()
+    g = g[g.도달 >= C.MIN_CELL_SAMPLE].copy()      # 칸 기준. MIN_SAMPLE 과 다르다
     g["전환율"] = g.전환 / g.도달
     g["비중"] = g.도달 / total if total else float("nan")
     return g[[dim, "도달", "전환", "전환율", "비중"]].sort_values(dim)
@@ -440,28 +442,40 @@ def srm_check(asg: pd.DataFrame, exp_id: str) -> dict:
             "ratio": (c / (c + t), t / (c + t))}
 
 
-def trust_check(srm: dict, n_total: int, days: int | None = None) -> str | None:
-    """이 실험을 믿을 수 있는가. **계산하기 전에** 묻는다.
-
-    ★ Day3 실습 C에서 채웁니다. ← 오늘의 핵심
+def trust_check(n_cell: int,
+                years: set | None = None,
+                compare: tuple[set, set] | None = None,
+                *, guardrail: bool = False,
+                t: dict | None = None) -> str | None:
+    """이 숫자를 믿을 수 있는가. **계산하기 전에** 묻는다.
 
     ────────────────────────────────────────────────────────────
-    오늘의 어려운 일은 계산이 아니다.
+    어려운 일은 계산이 아니다.
     **계산은 이미 할 수 있는데, 화면에 안 그리는 코드를 쓰는 것**이다.
     ────────────────────────────────────────────────────────────
 
-    못 믿을 조건은 셋인데 **분기는 하나**다.
-
-        배정이 깨졌다      srm["ok"] 가 False
-                          → 어떤 효과가 나와도 해석할 수 없다
-        표본이 모자란다    n_total 이 config.MIN_SAMPLE 미만
-                          → 계산해도 못 믿는다. 내 데이터는 대개 여기 걸린다
-        기간이 안 찼다     days 가 최소 기간 미만
-                          → 초기 효과가 남아 있다
-
-    하나라도 걸리면 **사유 문자열**을 돌려준다. 돌려주면
-    experiment_results() 가 거기서 멈추고 **지표를 계산하지 않는다.**
+    못 믿을 조건은 셋인데 **분기는 하나**다. 하나라도 걸리면 사유 문자열을
+    돌려주고, 부르는 쪽은 거기서 멈춰 **지표를 계산하지 않는다.**
     다 통과하면 None 을 돌려준다.
+
+        1. 칸 표본이 얇다   n_cell < config.MIN_CELL_SAMPLE
+                            -> 비율로 말할 수 없는 크기다
+        2. 기간이 안 지났다  years 에 config.ACTUALS_LAST_YEAR 뒤가 있다
+                            -> **가드레일에만 적용**(guardrail=True). 실적
+                               대조가 없으니 괴리를 계산할 재료가 없다
+        3. 제도가 다르다     compare 두 구간의 예산삭감연도 포함 여부가 다르다
+                            -> 차이가 개입 때문인지 제도 때문인지 못 가른다
+
+    **배정 검사(SRM)는 뺐다.** 이 도메인에 무작위 배정이 없다 — A/B 실험이
+    없어 전후 비교로 대체하며, 그 경우 인과 주장 자체가 불가하다.
+    (실험 데이터가 붙으면 srm_check() 를 부르는 쪽에서 따로 본다)
+
+    인자
+        n_cell    이 칸의 표본 수 (분해해서 만든 칸 하나)
+        years     이 칸이 포함하는 cycle_year 집합. 조건 2 에 쓴다
+        compare   비교하는 두 구간의 cycle_year 집합 쌍. 조건 3 에 쓴다
+        guardrail 가드레일 지표인가. 조건 2 는 이때만 본다
+        t         테이블 dict(선택). 주면 조건 2 사유에 실제 건수를 넣는다
 
     "그래도 회색으로라도 보여주면 안 되나요?"
 
@@ -470,10 +484,38 @@ def trust_check(srm: dict, n_total: int, days: int | None = None) -> str | None:
 
     반환: 못 믿을 이유(str) 또는 None
     """
-    todo("Day3 실습 C", "못 믿을 조건 분기",
-         "배정·표본·기간 셋 중 하나라도 걸리면 사유를 돌려주십시오. "
-         "돌려주면 지표를 계산하지 않습니다.",
-         "core/metrics.py  trust_check()")
+    # 1. 칸 표본
+    if n_cell < C.MIN_CELL_SAMPLE:
+        return f"표본 {n_cell:,}건 (최소 {C.MIN_CELL_SAMPLE})"
+
+    # 2. 실적 대조 기간 — 가드레일에만 적용한다
+    if guardrail and years:
+        late = sorted(y for y in years if int(y) > C.ACTUALS_LAST_YEAR)
+        if late:
+            detail = ""
+            if t is not None and "plans" in t and "plan_actuals" in t:
+                pl, ac = t["plans"], t["plan_actuals"]
+                ids = set(ac.plan_id.astype(str))
+                m = pl[pl.cycle_year.isin(late) & pl.final_status.eq("확정배포")]
+                n_conf = len(m)
+                n_act = int(m.plan_id.astype(str).isin(ids).sum())
+                detail = f" — 확정배포 {n_conf:,}건 중 실적 대조 {n_act:,}건"
+            ys = "·".join(f"{y}년" for y in late)
+            return (f"{ys}은 실적 대조 기간이 안 지났습니다"
+                    f"{detail} (실적이 있는 마지막 연도 {C.ACTUALS_LAST_YEAR})")
+
+    # 3. 제도가 다른 구간끼리 비교 — 차이를 개입 효과로 읽을 수 없다
+    if compare:
+        a, b = compare
+        cut_a = bool({int(y) for y in a} & C.BUDGET_CUT_YEARS)
+        cut_b = bool({int(y) for y in b} & C.BUDGET_CUT_YEARS)
+        if cut_a != cut_b:
+            def lab(ys, cut):
+                return (f"{'·'.join(str(y) for y in sorted(int(x) for x in ys))}"
+                        f"({'예산삭감연도' if cut else '평년'})")
+            return (f"{lab(a, cut_a)} vs {lab(b, cut_b)} — 제도가 다름")
+
+    return None
 
 
 @st.cache_data(show_spinner=False)
@@ -505,7 +547,14 @@ def experiment_results(t: dict) -> list[dict]:
         }
 
         # ★ 판정이 계산보다 먼저다. 못 믿으면 여기서 끝난다.
-        reason = trust_check(srm, n_total)
+        #   배정 검사는 trust_check 에서 뺐다(이 도메인에 무작위 배정이 없다).
+        #   실험 데이터가 붙는 경로를 위해 여기서 따로 본다.
+        reason = None
+        if not srm.get("ok", True):
+            reason = (f"배정 불균형 — control {srm['c']:,} : "
+                      f"treatment {srm['t']:,} (p={srm['p']:.4f})")
+        if reason is None:
+            reason = trust_check(n_total)
         if reason:
             row["verdict"] = "무효"
             row["color"] = "block"
