@@ -125,10 +125,14 @@ def funnel_by(t: dict, dim: str, step_from: str, step_to: str) -> pd.DataFrame:
     departments 에 있어 plans.department_id 로 조인해야 붙는다.
     호출부(2_대시보드 · 3_리포트)도 같이 바꿨다.
 
-    축은 명세에서 정한 둘이다. 세 번째(department_id)는 보류.
+    축은 셋이다. 명세에서 둘을 정하고, 세 번째(부서)는 2026-09-03 에 보류를 풀었다.
 
-        division_type  사업부 9 / 지원부서 6 — 조직 성격
-        cycle_year     2022~2026 — 제출 사이클. 예산삭감연도(2023·2025) 비교용
+        department_name  부서 15개 — 어느 부서에서 막히는가 (기본 축)
+        division_type    사업부 9 / 지원부서 6 — 조직 성격
+        cycle_year       2022~2026 — 제출 사이클. 예산삭감연도(2023·2025) 비교용
+
+    부서 축은 표본이 가장 얇다. 병목 구간에서 부서당 도달이 30건대이므로
+    MIN_SAMPLE 은 넘지만, 여기서 다시 연도로 쪼개면 한 자리로 떨어진다.
 
     cycle_year 로 쪼개면 **시작 시점별 코호트**가 된다. 그때 주의할 것:
     최근 코호트는 아직 다 갈 시간이 없을 수 있다. 낮은 값이 성과 문제인지

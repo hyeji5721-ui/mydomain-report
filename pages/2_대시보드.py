@@ -65,10 +65,11 @@ if f is not None:
             f"<b>{(1-bn.step_rate)*100:.1f}%가 이탈</b>합니다.")
 
     with right:
-        # 분해 축 — 명세에서 정한 두 축. 세 번째(department_id)는 보류.
-        #   division_type  사업부 9 / 지원부서 6  (departments 에 있음)
-        #   cycle_year     2022~2026, 예산삭감연도 2023·2025 여부
-        DIMS = ["division_type", "cycle_year"]
+        # 분해 축 세 개. 맨 앞이 기본으로 선택된다.
+        #   department_name  부서 15개  (departments 에 있음) — 기본 축
+        #   division_type    사업부 9 / 지원부서 6  (departments 에 있음)
+        #   cycle_year       2022~2026, 예산삭감연도 2023·2025 여부
+        DIMS = ["department_name", "division_type", "cycle_year"]
         dim = st.radio("분해 축", DIMS, horizontal=True,
                        label_visibility="collapsed")
         i = st.selectbox(
