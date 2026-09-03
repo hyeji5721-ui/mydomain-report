@@ -131,6 +131,12 @@ def funnel_by(t: dict, dim: str, step_from: str, step_to: str) -> pd.DataFrame:
         division_type    사업부 9 / 지원부서 6 — 조직 성격
         cycle_year       2022~2026 — 제출 사이클. 예산삭감연도(2023·2025) 비교용
 
+    **셋 중 판정에 쓰는 것은 department_name 이다 — 격차가 커서가 아니라 부서 단위로
+    개입할 수 있어서다.** division_type 은 조직 성격이라 바꿔서 좋아지게 할 수 없다
+    (같은 구간 격차도 0.2%p 로 실제 안 갈린다). cycle_year 는 그 해 자체를 바꿀 수는
+    없지만 예산삭감 여부는 정책 레버라 후보로 남겼다 — department_name 만큼 직접적인
+    개입 대상은 아니다.
+
     부서 축은 표본이 가장 얇다. 병목 구간에서 부서당 도달이 27~45건이라
     MIN_CELL_SAMPLE(30) 에 못 미치는 칸이 생기고, 여기서 다시 연도로 쪼개면
     한 자리로 떨어진다 — 75개 조합 중 73개가 미달이다.
