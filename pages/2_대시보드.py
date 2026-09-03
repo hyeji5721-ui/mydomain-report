@@ -113,12 +113,38 @@ if rf is not None and len(rf):
             "비율(단위 기간당)로 바꾸거나 같은 시점에 시작한 것끼리 묶으십시오.",
             "info")
 
-# ── 실험 ──────────────────────────────────────────────────────────
-ui.section("실험 결과", "믿을 수 있는지 먼저 보고, 그 다음에 지표를 본다")
+# ── 전후 비교 (실험이 없는 도메인) ──────────────────────────────────
+ui.section("전후 비교", "믿을 수 있는지 먼저 보고, 그 다음에 지표를 본다")
 res = ui.guard(M.experiment_results, t)
 if res is not None and not res:
-    st.caption("실험이 없습니다. 전후 비교로 대신하되 "
-               "**인과를 주장할 수 없다**를 카드에 남기십시오.")
+    st.caption("실험이 없어 전후 비교로 대신합니다. **인과를 주장할 수 없습니다.**")
+    cards = ui.guard(M.cohort_cards, t)
+    for r in (cards or []):
+        p, g = r["primary"], r["guardrail"]
+        body = (
+            f'<div class="exp {r["color"]}">'
+            f'<div style="display:flex;align-items:flex-start;gap:12px">'
+            f'<div style="flex:1"><div class="id">{r["base"]} → {r["comp"]}</div>'
+            f'<div class="nm">{p["name"]}</div></div>'
+            f'<div>{ui.badge(r["color"], r["verdict"])}</div></div>'
+            f'<div style="margin-top:14px;display:flex;gap:28px;'
+            f'align-items:baseline;flex-wrap:wrap">'
+            f'<div><div style="font-size:11px;color:#64748b">{p["name"]}</div>'
+            f'<div class="mv">{p["base"]:.2f}% → {p["comp"]:.2f}% '
+            f'({p["delta"]:+.2f}%p)</div></div>')
+        if g:
+            body += (f'<div><div style="font-size:11px;color:#64748b">'
+                     f'{g["name"]}</div>'
+                     f'<div class="mv">{g["base"]:.2f}%p → {g["comp"]:.2f}%p '
+                     f'({g["delta"]:+.2f}%p)</div></div>')
+        body += (f'<div><div style="font-size:11px;color:#64748b">표본</div>'
+                 f'<div style="font-size:13px;color:#475569" class="num">'
+                 f'{p["n_base"]:,} / {p["n_comp"]:,}</div></div></div>'
+                 f'<div style="margin-top:12px;font-size:13px;color:#475569">'
+                 f'{r["reason"]}</div>'
+                 f'<div style="margin-top:6px;font-size:12px;color:#94a3b8">'
+                 f'{r["note"]}</div></div>')
+        st.markdown(body, unsafe_allow_html=True)
 for r in (res or []):
     cls = r["color"]
     head = (f'<div class="exp {cls}">'

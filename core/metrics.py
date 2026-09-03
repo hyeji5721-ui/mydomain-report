@@ -393,6 +393,123 @@ def status_of(name: str, value: float) -> str:
             else "warn" if value < th["경고"] else "ok")
 
 
+# ── 전후 비교 (실험이 없는 도메인의 대체) ─────────────────────────
+def _year_metrics(t: dict) -> pd.DataFrame:
+    """연도별 주지표·가드레일과 각각의 표본 수. cohort_compare 의 재료다."""
+    pl, ac = t["plans"], t["plan_actuals"]
+    p = pl[["plan_id", "cycle_year", "final_status"]].copy()
+    p["plan_id"] = p.plan_id.astype(str)
+    p["final_status"] = p.final_status.astype(str)
+    a = ac[["plan_id", "variance_pct"]].copy()
+    a["plan_id"] = a.plan_id.astype(str)
+    j = p.merge(a, on="plan_id", how="left")
+    g = j.groupby("cycle_year", observed=True)
+    out = pd.DataFrame({
+        "제출": g.plan_id.size(),
+        "전체 통과율": g.final_status.apply(lambda x: (x == "확정배포").mean() * 100),
+        "계획-실적 괴리율": g.variance_pct.mean(),
+        "실적표본": g.variance_pct.count(),
+    })
+    out.index = out.index.astype(int)
+    return out.sort_index()
+
+
+def cohort_compare(t: dict, base_year: int, comp_year: int) -> dict:
+    """두 연도 코호트를 전후로 비교하고 판정한다.
+
+    **이 도메인에 A/B 실험이 없다.** 무작위 배정이 없으므로 이 카드는
+    실험 결과가 아니라 **전후 비교**다. 시행 전후로 경기·조직개편·예산 정책
+    같은 다른 요인도 같이 바뀌므로 **인과를 주장할 수 없다.**
+    유의성·p값·신뢰구간은 계산하지 않는다 — 무작위 배정이 없으면 그 수치가
+    답하는 질문 자체가 성립하지 않는다.
+
+    **판정 순서를 코드로 박는다.** 좋은 결과를 먼저 보면 가드레일을 무시하고
+    싶어지기 때문이다. 1번을 통과했다고 바로 성공으로 가지 않는다.
+
+        1. 주지표가 config.MOVE_THRESHOLD 이상 움직였는가 (**절댓값**)
+           아니면 -> "효과 없음"                       (COLORS["none"])
+        2. 가드레일이 config.GUARDRAIL_MOVE 이상 나빠졌는가
+           그러면 -> "주의 필요"                       (COLORS["warn"])
+           계산할 수 없으면 -> "가드레일 없음"          (COLORS["warn"])
+        3. 둘 다 통과 -> "성공"                        (COLORS["ok"])
+
+    가드레일을 계산할 수 없는 코호트는 **성공으로 보내지 않는다.** 주지표가
+    올랐는데 무엇을 희생했는지 확인되지 않은 상태이고, 그것을 성공이라 부르면
+    가드레일을 둔 이유가 사라진다.
+
+    나빠지는 방향은 config.HIGHER_IS_WORSE 가 정한다 — 괴리율은 높을수록
+    나쁘므로 증가가 악화다.
+
+    **1번은 방향을 보지 않는다.** "움직였는가"만 묻는다. 그래서 주지표가 크게
+    나빠지고 가드레일이 괜찮으면 규칙상 "성공"이 된다 — 지금 데이터에서는
+    주지표 하락이 늘 가드레일 악화와 같이 와서 그 경우가 나오지 않지만,
+    규칙의 빈틈이다.
+
+    반환: dict(base, comp, primary, guardrail, verdict, color, reason, note)
+    """
+    y = _year_metrics(t)
+    for v in (base_year, comp_year):
+        if v not in y.index:
+            raise ValueError(f"cycle_year {v} 가 데이터에 없습니다. "
+                             f"있는 연도: {list(y.index)}")
+    a, b = y.loc[base_year], y.loc[comp_year]
+
+    P = "전체 통과율"
+    G = "계획-실적 괴리율"
+    d_primary = float(b[P] - a[P])
+    row = {
+        "base": int(base_year), "comp": int(comp_year),
+        "primary": {"name": P, "base": float(a[P]), "comp": float(b[P]),
+                    "delta": d_primary, "n_base": int(a.제출), "n_comp": int(b.제출)},
+        "guardrail": None,
+        "note": "무작위 배정이 아닌 전후 비교입니다 — 인과를 주장할 수 없습니다.",
+    }
+
+    # 제도가 다른 구간끼리의 비교는 단서로 붙인다(판정은 아래 순서대로 한다).
+    diff = trust_check(int(min(a.제출, b.제출)),
+                       compare=({base_year}, {comp_year}))
+    if diff:
+        row["note"] = f"{diff}. " + row["note"]
+
+    # ── 1. 주지표가 움직였는가 ────────────────────────────────────
+    if abs(d_primary) < C.MOVE_THRESHOLD:
+        row.update(verdict="효과 없음", color="none",
+                   reason=f"주지표 {d_primary:+.2f}%p 움직임 — 기준 "
+                          f"{C.MOVE_THRESHOLD}%p 미만")
+        return row
+
+    # ── 2. 가드레일을 볼 수 있는가, 나빠지지 않았는가 ─────────────
+    #    1번을 통과했다고 여기서 바로 성공으로 가지 않는다.
+    blocked = trust_check(int(b.실적표본), {comp_year}, guardrail=True, t=t)
+    if blocked:
+        row.update(verdict="가드레일 없음", color="warn",
+                   reason=f"무엇을 희생했는지 확인되지 않음 — {blocked}")
+        return row
+
+    d_guard = float(b[G] - a[G])
+    worse = d_guard if G in C.HIGHER_IS_WORSE else -d_guard
+    row["guardrail"] = {"name": G, "base": float(a[G]), "comp": float(b[G]),
+                        "delta": d_guard, "worse": worse,
+                        "n_base": int(a.실적표본), "n_comp": int(b.실적표본)}
+    if worse >= C.GUARDRAIL_MOVE:
+        row.update(verdict="주의 필요", color="warn",
+                   reason=f"주지표 {d_primary:+.2f}%p 움직였고, 가드레일이 "
+                          f"{worse:+.2f}%p 나빠졌습니다 (기준 {C.GUARDRAIL_MOVE}%p)")
+        return row
+
+    # ── 3. 둘 다 통과 ────────────────────────────────────────────
+    row.update(verdict="성공", color="ok",
+               reason=f"주지표 {d_primary:+.2f}%p 움직였고 가드레일 악화 "
+                      f"{worse:+.2f}%p (기준 {C.GUARDRAIL_MOVE}%p 미만)")
+    return row
+
+
+def cohort_cards(t: dict) -> list[dict]:
+    """연도 코호트를 앞뒤로 이어 비교한 카드 목록. 대시보드가 쓴다."""
+    ys = list(_year_metrics(t).index)
+    return [cohort_compare(t, a, b) for a, b in zip(ys, ys[1:])]
+
+
 # ── 실험 ──────────────────────────────────────────────────────────
 # ★ 실험별로 어느 구간을 보는지. 도메인이 바뀌면 이 표를 갈아끼운다.
 #   실험이 없는 도메인이면 비워 둔다.
