@@ -394,24 +394,51 @@ def status_of(name: str, value: float) -> str:
 
 
 # ── 전후 비교 (실험이 없는 도메인의 대체) ─────────────────────────
-def _year_metrics(t: dict) -> pd.DataFrame:
-    """연도별 주지표·가드레일과 각각의 표본 수. cohort_compare 의 재료다."""
-    pl, ac = t["plans"], t["plan_actuals"]
-    p = pl[["plan_id", "cycle_year", "final_status"]].copy()
-    p["plan_id"] = p.plan_id.astype(str)
+def _year_counts(t: dict) -> pd.DataFrame:
+    """연도별 제출 수 · 전체 통과율.
+
+    **가드레일 평균은 여기서 구하지 않는다.** 주지표는 판정 자체의 재료라
+    항상 계산해야 하지만, 가드레일은 못 믿을 조건(표본 부족)에 걸릴 수
+    있으므로 그 값을 여기서 미리 구해 두면 **판정이 계산 뒤로 밀린다.**
+    가드레일 평균은 trust_check() 를 통과한 뒤 _guardrail_mean() 이 낸다.
+    """
+    pl = t["plans"]
+    p = pl[["cycle_year", "final_status"]].copy()
     p["final_status"] = p.final_status.astype(str)
-    a = ac[["plan_id", "variance_pct"]].copy()
-    a["plan_id"] = a.plan_id.astype(str)
-    j = p.merge(a, on="plan_id", how="left")
-    g = j.groupby("cycle_year", observed=True)
+    g = p.groupby("cycle_year", observed=True)
     out = pd.DataFrame({
-        "제출": g.plan_id.size(),
+        "제출": g.size(),
         "전체 통과율": g.final_status.apply(lambda x: (x == "확정배포").mean() * 100),
-        "계획-실적 괴리율": g.variance_pct.mean(),
-        "실적표본": g.variance_pct.count(),
     })
     out.index = out.index.astype(int)
     return out.sort_index()
+
+
+def _guardrail_sample(t: dict, year: int) -> int:
+    """그 연도 확정배포 건 중 실적 대조가 있는 건수만 센다.
+
+    **평균은 계산하지 않는다.** trust_check() 가 이 건수만 보고 판정하고,
+    통과했을 때만 _guardrail_mean() 이 실제 값을 구한다.
+    """
+    pl, ac = t["plans"], t["plan_actuals"]
+    conf = pl[(pl.cycle_year == year) & (pl.final_status.astype(str) == "확정배포")]
+    ids = set(ac.plan_id.astype(str))
+    return int(conf.plan_id.astype(str).isin(ids).sum())
+
+
+def _guardrail_mean(t: dict, year: int) -> float:
+    """그 연도 계획-실적 괴리율 평균.
+
+    **trust_check() 를 통과한 뒤에만 부른다.** 못 믿을 조건에 걸린 연도에는
+    이 함수가 아예 호출되지 않는다 — 값을 구해 놓고 숨기는 것이 아니라
+    구하는 계산 자체를 하지 않는다.
+    """
+    pl, ac = t["plans"], t["plan_actuals"]
+    conf = pl[(pl.cycle_year == year) & (pl.final_status.astype(str) == "확정배포")]
+    conf = conf[["plan_id"]].astype(str)
+    a = ac[["plan_id", "variance_pct"]].copy()
+    a["plan_id"] = a.plan_id.astype(str)
+    return float(conf.merge(a, on="plan_id", how="left").variance_pct.mean())
 
 
 def cohort_compare(t: dict, base_year: int, comp_year: int) -> dict:
@@ -445,33 +472,38 @@ def cohort_compare(t: dict, base_year: int, comp_year: int) -> dict:
     주지표 하락이 늘 가드레일 악화와 같이 와서 그 경우가 나오지 않지만,
     규칙의 빈틈이다.
 
+    **판정이 계산보다 먼저다.** 못 믿을 조건에 걸리면 그 값을 구하는 계산
+    자체를 하지 않는다 — 계산해 놓고 화면에 안 그리는 것이 아니다.
+
     반환: dict(base, comp, primary, guardrail, verdict, color, reason, note)
     """
-    y = _year_metrics(t)
+    y = _year_counts(t)
     for v in (base_year, comp_year):
         if v not in y.index:
             raise ValueError(f"cycle_year {v} 가 데이터에 없습니다. "
                              f"있는 연도: {list(y.index)}")
     a, b = y.loc[base_year], y.loc[comp_year]
+    n_cmp = int(min(a.제출, b.제출))
 
-    P = "전체 통과율"
-    G = "계획-실적 괴리율"
-    d_primary = float(b[P] - a[P])
     row = {
         "base": int(base_year), "comp": int(comp_year),
-        "primary": {"name": P, "base": float(a[P]), "comp": float(b[P]),
-                    "delta": d_primary, "n_base": int(a.제출), "n_comp": int(b.제출)},
-        "guardrail": None,
+        "primary": None, "guardrail": None,
         "note": "무작위 배정이 아닌 전후 비교입니다 — 인과를 주장할 수 없습니다.",
     }
 
     # 제도가 다른 구간끼리의 비교는 단서로 붙인다(판정은 아래 순서대로 한다).
-    diff = trust_check(int(min(a.제출, b.제출)),
-                       compare=({base_year}, {comp_year}))
+    # 제출 건수(카운트)만 보고 판정하므로 주지표·가드레일 값은 아직 안 구했다.
+    diff = trust_check(n_cmp, compare=({base_year}, {comp_year}))
     if diff:
         row["note"] = f"{diff}. " + row["note"]
 
     # ── 1. 주지표가 움직였는가 ────────────────────────────────────
+    #   이건 못 믿을 조건이 아니라 판정 자체의 재료라, 항상 구해야 한다.
+    P = "전체 통과율"
+    d_primary = float(b[P] - a[P])
+    row["primary"] = {"name": P, "base": float(a[P]), "comp": float(b[P]),
+                      "delta": d_primary, "n_base": int(a.제출), "n_comp": int(b.제출)}
+
     if abs(d_primary) < C.MOVE_THRESHOLD:
         row.update(verdict="효과 없음", color="none",
                    reason=f"주지표 {d_primary:+.2f}%p 움직임 — 기준 "
@@ -479,18 +511,25 @@ def cohort_compare(t: dict, base_year: int, comp_year: int) -> dict:
         return row
 
     # ── 2. 가드레일을 볼 수 있는가, 나빠지지 않았는가 ─────────────
-    #    1번을 통과했다고 여기서 바로 성공으로 가지 않는다.
-    blocked = trust_check(int(b.실적표본), {comp_year}, guardrail=True, t=t)
+    #   1번을 통과했다고 여기서 바로 성공으로 가지 않는다.
+    #   표본(건수)만으로 먼저 판정한다 — 평균은 아직 구하지 않았다.
+    n_guard = _guardrail_sample(t, comp_year)
+    blocked = trust_check(n_guard, {comp_year}, guardrail=True, t=t)
     if blocked:
         row.update(verdict="가드레일 없음", color="warn",
                    reason=f"무엇을 희생했는지 확인되지 않음 — {blocked}")
-        return row
+        return row              # 계획-실적 괴리율 평균은 계산되지 않았다
 
-    d_guard = float(b[G] - a[G])
+    # 판정을 통과했을 때만 실제 값을 구한다.
+    G = "계획-실적 괴리율"
+    g_base = _guardrail_mean(t, base_year)
+    g_comp = _guardrail_mean(t, comp_year)
+    n_base = _guardrail_sample(t, base_year)
+    d_guard = g_comp - g_base
     worse = d_guard if G in C.HIGHER_IS_WORSE else -d_guard
-    row["guardrail"] = {"name": G, "base": float(a[G]), "comp": float(b[G]),
+    row["guardrail"] = {"name": G, "base": g_base, "comp": g_comp,
                         "delta": d_guard, "worse": worse,
-                        "n_base": int(a.실적표본), "n_comp": int(b.실적표본)}
+                        "n_base": n_base, "n_comp": n_guard}
     if worse >= C.GUARDRAIL_MOVE:
         row.update(verdict="주의 필요", color="warn",
                    reason=f"주지표 {d_primary:+.2f}%p 움직였고, 가드레일이 "
@@ -506,7 +545,7 @@ def cohort_compare(t: dict, base_year: int, comp_year: int) -> dict:
 
 def cohort_cards(t: dict) -> list[dict]:
     """연도 코호트를 앞뒤로 이어 비교한 카드 목록. 대시보드가 쓴다."""
-    ys = list(_year_metrics(t).index)
+    ys = list(_year_counts(t).index)
     return [cohort_compare(t, a, b) for a, b in zip(ys, ys[1:])]
 
 

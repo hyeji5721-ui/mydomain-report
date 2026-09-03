@@ -145,6 +145,32 @@ if res is not None and not res:
                  f'<div style="margin-top:6px;font-size:12px;color:#94a3b8">'
                  f'{r["note"]}</div></div>')
         st.markdown(body, unsafe_allow_html=True)
+
+        # 판정 과정 — 카드 하나당 상태 위젯 하나. 다시 st.status() 를 불러
+        # update 하면 위젯이 하나 더 생긴다. with 이 돌려준 box 만 잡아 쓴다.
+        with st.status("판정 과정", expanded=False) as box:
+            if r["verdict"] == "가드레일 없음":
+                st.write(f"1) 못 믿을 조건 확인 — 걸림 ({r['reason']})")
+            else:
+                st.write("1) 못 믿을 조건 확인 — 통과")
+
+            if p is None:
+                st.write("2) 주지표(전체 통과율) — 계산하지 않음")
+            else:
+                st.write(f"2) 주지표(전체 통과율) — {p['base']:.2f}% → "
+                         f"{p['comp']:.2f}% ({p['delta']:+.2f}%p)")
+
+            if g is None:
+                st.write("3) 가드레일(계획-실적 괴리율) — 계산하지 않음")
+            else:
+                judge = ("나빠짐 (기준 " + f"{C.GUARDRAIL_MOVE}%p 초과)"
+                          if g["worse"] >= C.GUARDRAIL_MOVE else "양호 (기준 이내)")
+                st.write(f"3) 가드레일(계획-실적 괴리율) — {g['base']:.2f}%p → "
+                         f"{g['comp']:.2f}%p ({g['delta']:+.2f}%p) · {judge}")
+
+            # 안 닫으면 state 가 "running" 으로 남아 스피너가 계속 돈다.
+            box.update(label=r["verdict"],
+                       state="error" if r["verdict"] == "무효" else "complete")
 for r in (res or []):
     cls = r["color"]
     head = (f'<div class="exp {cls}">'
