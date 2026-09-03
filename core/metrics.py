@@ -487,7 +487,7 @@ def cohort_compare(t: dict, base_year: int, comp_year: int) -> dict:
 
     row = {
         "base": int(base_year), "comp": int(comp_year),
-        "primary": None, "guardrail": None,
+        "primary": None, "guardrail": None, "untrust": None,
         "note": "무작위 배정이 아닌 전후 비교입니다 — 인과를 주장할 수 없습니다.",
     }
 
@@ -516,6 +516,23 @@ def cohort_compare(t: dict, base_year: int, comp_year: int) -> dict:
     n_guard = _guardrail_sample(t, comp_year)
     blocked = trust_check(n_guard, {comp_year}, guardrail=True, t=t)
     if blocked:
+        # "왜 감췄나" 화면이 쓰는 원재료. blocked 문자열을 파싱하지 않고
+        # trust_check() 가 실제로 본 값을 그대로 담는다.
+        #   대조 미도래가 근본 원인이면 그것을 조건으로 보인다 — 표본 0건은
+        #   결과이지 원인이 아니다. 그 해가 ACTUALS_LAST_YEAR 를 안 넘었는데도
+        #   표본이 모자라면 그때는 표본 부족이 진짜 원인이다.
+        cut_base = int(base_year) in C.BUDGET_CUT_YEARS
+        cut_comp = int(comp_year) in C.BUDGET_CUT_YEARS
+        condition = ("대조 미도래" if int(comp_year) > C.ACTUALS_LAST_YEAR
+                     else "표본 부족")
+        row["untrust"] = {
+            "condition": condition,
+            "n_guard": n_guard, "min_cell": C.MIN_CELL_SAMPLE,
+            "cycle_year": int(comp_year),
+            "actuals_last_year": C.ACTUALS_LAST_YEAR,
+            "base_year": int(base_year), "comp_year": int(comp_year),
+            "cut_base": cut_base, "cut_comp": cut_comp,
+        }
         row.update(verdict="가드레일 없음", color="warn",
                    reason=f"무엇을 희생했는지 확인되지 않음 — {blocked}")
         return row              # 계획-실적 괴리율 평균은 계산되지 않았다

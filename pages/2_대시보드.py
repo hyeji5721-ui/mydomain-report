@@ -25,10 +25,44 @@ t = ui.guard(load.load_all)
 if t is None:
     st.stop()
 
+@st.dialog("이 값을 왜 보여주지 않나")
+def why_hidden(u: dict) -> None:
+    """감춰진 카드의 근거만 보여준다. 지표 값·증감·p값은 넣지 않는다."""
+    st.markdown(f"**걸린 조건** — {u['condition']}")
+    cut = (f"{u['base_year']}년({'예산삭감연도' if u['cut_base'] else '평년'}) vs "
+           f"{u['comp_year']}년({'예산삭감연도' if u['cut_comp'] else '평년'})")
+    st.markdown(
+        "| 항목 | 값 |\n|---|---|\n"
+        f"| 표본 수 (실적 대조 건수) | {u['n_guard']:,}건 (최소 {u['min_cell']}건) |\n"
+        f"| cycle_year | {u['cycle_year']} |\n"
+        f"| 비교 구간의 예산삭감연도 여부 | {cut} |")
+
+    if u["condition"] == "표본 부족":
+        advice = "표본이 최소 기준(30건) 이상 쌓이면 판정 가능"
+    elif u["condition"] == "대조 미도래":
+        advice = (f"{u['comp_year']}년 실적이 적재되면(대조 기간 경과 후) 판정 가능")
+    else:
+        advice = "같은 성격의 연도끼리(평년 또는 예산삭감연도끼리만) 비교하면 판정 가능"
+    st.markdown(f"**무엇을 하면 믿을 수 있는가** — {advice}")
+
+
 st.markdown('<div style="font-size:24px;font-weight:800;margin-bottom:16px">'
             '대시보드</div>', unsafe_allow_html=True)
 
 # ── 지표 카드 ─────────────────────────────────────────────────────
+# 지표 이름 옆 "정의" — 계산식과 임계값 근거. 값·증감은 넣지 않는다.
+KPI_DEFS = {
+    "전체 통과율": (
+        "final_status = '확정배포' 인 계획안 수 / plans 전체 행 수 × 100",
+        "경고 70.0 · 위험 65.0 — 임의 지정, 통계적 산출 근거 없음"),
+    "계획-실적 괴리율": (
+        "plan_actuals.variance_pct 의 평균",
+        "경고 10.28 (347건 전체 중앙값) · 위험 16.76 (예산삭감연도 평균, n=169)"),
+    "유지율": (
+        "final_status 가 확정배포 또는 확정배포대기 / plans 전체 행 수 × 100",
+        "임계값 없음 — 판정 기준을 정하지 않아 회색(판정 없음)으로 뜬다"),
+}
+
 k = ui.guard(M.kpis, t)
 if k:
     m = ui.guard(M.monthly, t)
@@ -38,6 +72,11 @@ if k:
             lv = M.status_of(name, v["value"])
             st.markdown(ui.kpi_card(name, v["fmt"].format(v["value"]), "", lv),
                         unsafe_allow_html=True)
+            if name in KPI_DEFS:
+                calc, basis = KPI_DEFS[name]
+                with st.popover("정의", use_container_width=False):
+                    st.markdown(f"**계산식**  \n{calc}")
+                    st.markdown(f"**임계값 근거**  \n{basis}")
             # 추이가 있으면 스파크라인. 지표 이름과 열 이름이 같아야 그려진다.
             if m is not None and name in getattr(m, "columns", []):
                 st.plotly_chart(
@@ -70,8 +109,20 @@ if f is not None:
         #   division_type    사업부 9 / 지원부서 6  (departments 에 있음)
         #   cycle_year       2022~2026, 예산삭감연도 2023·2025 여부
         DIMS = ["department_name", "division_type", "cycle_year"]
-        dim = st.radio("분해 축", DIMS, horizontal=True,
-                       label_visibility="collapsed")
+        DIM_DEFAULT = DIMS[0]
+
+        # query_params 에서 초기값을 읽는다. 없거나 이상한 값이면 기본값.
+        # 에러를 내면 안 되므로 in 검사로만 판정한다 — KeyError 를 안 낸다.
+        _qp_dim = st.query_params.get("dim", DIM_DEFAULT)
+        if _qp_dim not in DIMS:
+            _qp_dim = DIM_DEFAULT
+
+        dim = st.segmented_control("분해 축", DIMS, default=_qp_dim,
+                                   label_visibility="collapsed")
+        if dim not in DIMS:      # 다시 눌러 선택을 해제하면 None 이 온다
+            dim = DIM_DEFAULT
+        if st.query_params.get("dim") != dim:
+            st.query_params["dim"] = dim
         i = st.selectbox(
             "구간", range(len(f) - 1),
             format_func=lambda i: f"{f.label.iloc[i]} → {f.label.iloc[i+1]}",
@@ -118,8 +169,27 @@ ui.section("전후 비교", "믿을 수 있는지 먼저 보고, 그 다음에 �
 res = ui.guard(M.experiment_results, t)
 if res is not None and not res:
     st.caption("실험이 없어 전후 비교로 대신합니다. **인과를 주장할 수 없습니다.**")
-    cards = ui.guard(M.cohort_cards, t)
-    for r in (cards or []):
+    cards = ui.guard(M.cohort_cards, t) or []
+
+    # 연도 필터 — 그 연도까지의 전후 비교만 본다. 지표 카드(전체 통과율 등)
+    # 는 전체 기간 정의(위 "정의" 팝오버 참고)라 이 필터로 값이 바뀌지 않는다.
+    YEARS = sorted({r["base"] for r in cards} | {r["comp"] for r in cards})
+    if YEARS:
+        _year_default = YEARS[-1]
+        _qp_year_raw = st.query_params.get("year")
+        try:
+            _qp_year = int(_qp_year_raw)
+        except (TypeError, ValueError):
+            _qp_year = _year_default
+        if _qp_year not in YEARS:
+            _qp_year = _year_default
+
+        year = st.select_slider("연도까지 보기", options=YEARS, value=_qp_year)
+        if st.query_params.get("year") != str(year):
+            st.query_params["year"] = str(year)
+        cards = [r for r in cards if r["comp"] <= year]
+
+    for r in cards:
         p, g = r["primary"], r["guardrail"]
         body = (
             f'<div class="exp {r["color"]}">'
@@ -171,6 +241,10 @@ if res is not None and not res:
             # 안 닫으면 state 가 "running" 으로 남아 스피너가 계속 돈다.
             box.update(label=r["verdict"],
                        state="error" if r["verdict"] == "무효" else "complete")
+
+        if r.get("untrust"):
+            if st.button("왜 감췄나", key=f"why_{r['base']}_{r['comp']}"):
+                why_hidden(r["untrust"])
 for r in (res or []):
     cls = r["color"]
     head = (f'<div class="exp {cls}">'
@@ -287,3 +361,13 @@ if ce is not None and len(ce):
             f'<div style="font-size:14px;font-weight:700;color:{C.COLORS["block"]}">'
             f'{" < ".join(real)}</div></div>', unsafe_allow_html=True)
         st.caption("비용은 가정값입니다. 리포트에 쓸 때 '가정값 기반'을 남기십시오.")
+
+# ── 현재 화면 링크 ────────────────────────────────────────────────
+# 위에서 정리한 두 필터(dim · year)가 이미 st.query_params 에 반영된 뒤라,
+# 이 시점의 쿼리스트링이 지금 화면 상태와 어긋나지 않는다.
+st.divider()
+st.caption("현재 화면 링크 — 복사해서 그대로 공유하면 같은 상태로 열립니다")
+_qs = "&".join(f"{k}={v}" for k, v in st.query_params.items())
+_base = (st.context.url.split("?")[0] if getattr(st.context, "url", None) else "")
+st.code(f"{_base}?{_qs}" if _qs else (_base or "(주소는 브라우저 주소창에서 확인하십시오)"),
+        language=None)
