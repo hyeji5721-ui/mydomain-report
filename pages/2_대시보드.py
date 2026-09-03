@@ -368,6 +368,19 @@ if ce is not None and len(ce):
 st.divider()
 st.caption("현재 화면 링크 — 복사해서 그대로 공유하면 같은 상태로 열립니다")
 _qs = "&".join(f"{k}={v}" for k, v in st.query_params.items())
-_base = (st.context.url.split("?")[0] if getattr(st.context, "url", None) else "")
+_raw = getattr(st.context, "url", None) or ""
+if _raw:
+    from urllib.parse import urlsplit, urlunsplit, unquote
+    _parts = urlsplit(_raw)
+    _segs = [seg for seg in _parts.path.split("/") if seg]
+    # 한글 페이지 이름에서 st.context.url 이 마지막 경로 조각을
+    # 인코딩된 것과 원문으로 두 번 겹쳐 돌려줄 때가 있다. 디코딩해서
+    # 같으면 하나만 남긴다 — 실제로 겹치지 않으면 아무 일도 하지 않는다.
+    if len(_segs) >= 2 and unquote(_segs[-1]) == unquote(_segs[-2]):
+        _segs = _segs[:-1]
+    _path = "/" + "/".join(_segs)
+    _base = urlunsplit((_parts.scheme, _parts.netloc, _path, "", ""))
+else:
+    _base = ""
 st.code(f"{_base}?{_qs}" if _qs else (_base or "(주소는 브라우저 주소창에서 확인하십시오)"),
         language=None)
