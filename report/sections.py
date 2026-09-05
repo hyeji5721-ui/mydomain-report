@@ -102,11 +102,11 @@ def _s3_method(t: dict) -> dict:
     n_plans = len(pl)
     n_dup = int(ev.duplicated().sum())
     body = (
-        f"분석 단위는 계획안 1건입니다. plan_id 로 고유하게 셉니다.\n"
-        f"데이터 기간은 {C.PERIOD[0]} ~ {C.PERIOD[1]}이고, plans 는 {n_plans}건입니다.\n"
-        f"단계 통과는 plan_stage_events 에서 완전중복 {n_dup}행을 제거한 뒤, "
+        f"- 분석 단위는 계획안 1건입니다. plan_id 로 고유하게 셉니다.\n"
+        f"- 데이터 기간은 {C.PERIOD[0]} ~ {C.PERIOD[1]}이고, plans 는 {n_plans}건입니다.\n"
+        f"- 단계 통과는 plan_stage_events 에서 완전중복 {n_dup}행을 제거한 뒤, "
         f"result가 \"통과\"인 행만 도달로 셉니다.\n"
-        f"주지표(전체 통과율)는 2026 코호트도 포함해서 봅니다. 가드레일(계획-실적 "
+        f"- 주지표(전체 통과율)는 2026 코호트도 포함해서 봅니다. 가드레일(계획-실적 "
         f"괴리율)은 2025년까지만 봅니다 — 2026년 확정배포 건 중 plan_actuals 가 "
         f"0건이라 실적 대조 자체가 아직 존재하지 않기 때문입니다."
     )
