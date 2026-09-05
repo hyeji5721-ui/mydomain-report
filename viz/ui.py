@@ -232,7 +232,7 @@ def sidebar_nav(active: str) -> None:
         st.markdown(
             f'<div style="padding:6px 0 14px">'
             f'<div style="font-size:17px;font-weight:800;color:{C.BRAND["ink"]}">'
-            f'성장 리포트</div>'
+            f'경영계획 분석 리포트</div>'
             f'<div style="font-size:11px;color:{C.BRAND["muted"]}">'
             f'{C.DATASET}</div></div>', unsafe_allow_html=True)
         st.page_link("app.py", label="홈", icon="🏠")
