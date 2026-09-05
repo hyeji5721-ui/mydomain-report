@@ -116,6 +116,30 @@ with body:
         else:
             st.caption("✓ 인과 단정 표현 검사 통과")
 
+        if sec.get("kpi_cards"):
+            cols = st.columns(len(sec["kpi_cards"]))
+            for col, c in zip(cols, sec["kpi_cards"]):
+                with col:
+                    st.metric(c["name"], c["value"], border=True)
+                    st.markdown(ui.badge(c["status"]), unsafe_allow_html=True)
+
+        for tbl in sec.get("tables", []):
+            if tbl.get("caption"):
+                st.caption(tbl["caption"])
+            st.dataframe(
+                pd.DataFrame(tbl["rows"]), width="stretch", hide_index=True,
+                column_config={
+                    "도달": st.column_config.NumberColumn("도달", format="%d건"),
+                    "전환": st.column_config.NumberColumn("전환", format="%d건"),
+                    "전환율": st.column_config.NumberColumn("전환율", format="%.2f%%"),
+                    "직전 단계 대비": st.column_config.NumberColumn(
+                        "직전 단계 대비", format="%.2f%%"),
+                    "1단계 대비 누적": st.column_config.NumberColumn(
+                        "1단계 대비 누적", format="%.2f%%"),
+                    "평균 준비기간(일)": st.column_config.NumberColumn(
+                        "평균 준비기간(일)", format="%.1f일"),
+                })
+
         if "funnel" in sec.get("charts", []):
             f = M.funnel(t["plan_stage_events"])
             st.image(pdf_charts.funnel_png(f), width="stretch")
@@ -143,8 +167,12 @@ with body:
                                "info")
                 if hs.get("guide_disclaimer"):
                     ui.callout(hs["guide_disclaimer"])
+                # 예시 문장을 박스 초기값으로 넣는다(내용이 비어 있을 때만 —
+                # 이미 쓴 내용을 덮어쓰지 않는다). [ ] 로 남겨둔 판단 부분은
+                # 지우지 않고 그대로 제출하면 예시가 리포트에 그대로 실린다 —
+                # 저장 전에 반드시 괄호를 채우거나 지워야 한다.
                 drafts[title] = st.text_area(
-                    title, value=hs["body"], height=200,
+                    title, value=hs["body"] or hs.get("example", ""), height=200,
                     placeholder=hs["placeholder"], key=f"form_{title}",
                     label_visibility="collapsed")
                 st.divider()
@@ -152,17 +180,27 @@ with body:
 
         if submitted:
             st.session_state.human.update(drafts)
-            # 걸려도 저장은 한다 — check_phrasing() 은 저장을 막는 검증이
-            # 아니라 사람이 쓴 뒤 스스로 다시 보게 하는 경고다.
+            # 걸려도 저장은 한다 — 저장을 막는 검증이 아니라 사람이 쓴 뒤
+            # 스스로 다시 보게 하는 경고다(check_phrasing() 과 같은 자리).
             flagged = {title: S.check_phrasing(text)
                       for title, text in drafts.items() if S.check_phrasing(text)}
+            unresolved = {title: S.check_placeholders(text)
+                         for title, text in drafts.items() if S.check_placeholders(text)}
+            msgs = []
             if flagged:
                 detail = " / ".join(f"{title}: {', '.join(words)}"
                                     for title, words in flagged.items())
-                ui.callout(f"저장했습니다. 다만 인과를 단정하는 표현이 있습니다 — "
-                           f"{detail}. 관측 데이터로는 인과를 주장할 수 없습니다.")
+                msgs.append(f"인과를 단정하는 표현이 있습니다 — {detail}. "
+                           f"관측 데이터로는 인과를 주장할 수 없습니다.")
+            if unresolved:
+                detail = " / ".join(f"{title}: {len(items)}곳"
+                                    for title, items in unresolved.items())
+                msgs.append(f"예시 문장의 [ ] 자리가 안 채워졌습니다 — {detail}. "
+                           f"그대로 두면 리포트에 대괄호가 그대로 실립니다.")
+            if msgs:
+                ui.callout("저장했습니다. 다만 " + " ".join(msgs))
             else:
-                st.success("저장했습니다. 세 장 모두 인과 단정 표현 검사 통과.")
+                st.success("저장했습니다. 세 장 모두 검사 통과.")
 
 # ── 내보내기 ──────────────────────────────────────────────────────
 st.divider()

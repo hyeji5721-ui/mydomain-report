@@ -187,6 +187,117 @@ def funnel_by(t: dict, dim: str, step_from: str, step_to: str) -> pd.DataFrame:
     return g[[dim, "도달", "전환", "전환율", "비중"]].sort_values(dim)
 
 
+@st.cache_data(show_spinner=False)
+def reviewer_pass_rate(t: dict, stage: str) -> pd.DataFrame:
+    """그 단계 담당자별 통과율. 단계별 개별 통과 조건이 담당자마다 실제로
+    다르게 적용되는지를 본다 — 격차가 크면 담당자 배분·교육으로 개입할 수 있다.
+
+    ★ 2026-09-05 에 추가한 reviewer_id · review_score 를 쓴다(합성 추가 데이터,
+    원래 명세엔 없었다). 통과 조건은 config.PASS_THRESHOLD 그대로 다시 적용한다
+    (review_score >= PASS_THRESHOLD) — result 를 그대로 세지 않는 이유는, 이
+    조건식 자체가 "단계별 개별 통과 조건"이 데이터에 있다는 것을 보여주는
+    자리이기 때문이다.
+
+    부서초안제출(자체 제출)·철회(심사 전 자진 철회) 행은 담당자가 없어 이
+    분해를 만들 수 없다 — stage 는 config.FUNNEL_STEPS[1:] 중 하나여야 한다.
+
+    반환: DataFrame[reviewer_id, n, pass_rate]
+    표본이 config.MIN_CELL_SAMPLE 미만인 담당자는 빼고 돌려준다(funnel_by() 와 같은 기준).
+    """
+    if stage not in C.FUNNEL_STEPS[1:]:
+        raise ValueError(
+            f"stage={stage!r} 는 담당자 판정이 없는 단계입니다. "
+            f"{C.FUNNEL_STEPS[1:]} 중 하나를 쓰십시오 — "
+            f"부서초안제출은 자체 제출, 철회는 심사 전이라 담당자가 없습니다.")
+
+    ev = t["plan_stage_events"].drop_duplicates()
+    sub = ev[(ev.stage_name == stage) & ev.reviewer_id.notna()].copy()
+    sub["_pass"] = sub.review_score >= C.PASS_THRESHOLD
+
+    g = (sub.groupby("reviewer_id")
+            .agg(n=("event_id", "size"), pass_rate=("_pass", "mean"))
+            .reset_index())
+    g["pass_rate"] *= 100
+    return g[g.n >= C.MIN_CELL_SAMPLE].sort_values("pass_rate")
+
+
+@st.cache_data(show_spinner=False)
+def briefing_pass_rate(t: dict, stage: str = "이사회승인") -> pd.DataFrame:
+    """그 단계 사전 설명회 실시 여부별 통과율. reviewer_pass_rate() 와 달리
+    담당자 개인 격차가 아니라 **개입 가능한 프로세스 레버**를 본다 — 사전
+    설명회를 의무화하면 통과율이 바뀔 수 있다는 가설을 검증하는 자리다.
+
+    ★ 2026-09-05 에 추가한 pre_briefing 을 쓴다(합성 추가 데이터, 원래 명세엔
+    없었다). 지금은 병목 구간(경영진검토→이사회승인)에만 값이 있다 — 원인을
+    찾아야 할 구간이 거기뿐이라 거기만 채웠다(다른 구간은 이미 통과율이
+    94~96% 라 조사할 문제가 없다). stage 를 인자로 받아 두는 이유는, 나중에
+    병목이 다른 단계로 옮겨가 그 단계에도 pre_briefing 이 채워지면 이 함수를
+    고치지 않고 그대로 재사용하기 위해서다 — 아직 값이 없는 단계를 넣으면
+    표본이 비어 빈 결과가 돌아온다.
+
+    reviewer_pass_rate() 는 review_score >= PASS_THRESHOLD 로 판정하지만
+    (그게 "단계별 개별 통과 조건"이 있다는 것을 보여주는 자리라서), pre_briefing
+    은 판정 조건이 아니라 원인 후보라 실제 result 를 그대로 쓴다.
+
+    반환: DataFrame[pre_briefing, n, pass_rate]
+    표본이 config.MIN_CELL_SAMPLE 미만이면 빼고 돌려준다(다른 분해와 같은 기준).
+    """
+    if stage not in C.FUNNEL_STEPS[1:]:
+        raise ValueError(
+            f"stage={stage!r} 는 사전 설명회 판정이 없는 단계입니다. "
+            f"{C.FUNNEL_STEPS[1:]} 중 하나를 쓰십시오.")
+
+    ev = t["plan_stage_events"].drop_duplicates()
+    sub = ev[(ev.stage_name == stage) & ev.pre_briefing.notna()].copy()
+    sub["_pass"] = sub.result == "통과"
+
+    g = (sub.groupby("pre_briefing")
+            .agg(n=("event_id", "size"), pass_rate=("_pass", "mean"))
+            .reset_index())
+    g["pass_rate"] *= 100
+    return g[g.n >= C.MIN_CELL_SAMPLE].sort_values("pass_rate")
+
+
+@st.cache_data(show_spinner=False)
+def prep_days_by_outcome(t: dict, stage: str = "이사회승인") -> pd.DataFrame:
+    """그 단계 최종 통과/반려 여부에 따른 준비기간(착수~제출 소요일) 평균.
+
+    briefing_pass_rate() 는 그 단계 이벤트(재도전 포함 시도 하나하나)를 세지만,
+    이건 **계획안 단위**다 — prep_days 가 plans 컬럼이라 계획안 하나에 값 하나뿐이고,
+    재도전 여부와 무관하게 그 단계를 "최종" 통과했는지 반려로 끝났는지로 가른다.
+
+    ★ 2026-09-05 에 추가한 prep_days 를 쓴다(합성 추가 데이터). is_new_business
+    와 달리 이건 실제로 심어둔 신호다 — 준비기간이 짧을수록 반려로 끝나는
+    비중이 높다. stage 를 인자로 받는 이유·아직 이 병목 구간에만 값이 있는
+    이유는 briefing_pass_rate() 와 같다.
+
+    그 단계에 도달조차 못 한 계획안(더 앞에서 반려·철회되었거나 확정배포대기로
+    아직 도달 전인 것)은 뺀다 — 이 단계의 통과/반려를 비교하는 자리라
+    "해당 없음"을 넣으면 비교 대상이 아닌 것이 섞인다.
+
+    반환: DataFrame[outcome, n, prep_days]  (outcome: 통과/반려)
+    표본이 config.MIN_CELL_SAMPLE 미만이면 빼고 돌려준다(다른 분해와 같은 기준).
+    """
+    if stage not in C.FUNNEL_STEPS[1:]:
+        raise ValueError(
+            f"stage={stage!r} 는 준비기간 판정이 없는 단계입니다. "
+            f"{C.FUNNEL_STEPS[1:]} 중 하나를 쓰십시오.")
+
+    ev = t["plan_stage_events"].drop_duplicates()
+    stage_ev = ev[ev.stage_name == stage]
+    passed = set(stage_ev.loc[stage_ev.result == "통과", "plan_id"].astype(str))
+    reached = set(stage_ev["plan_id"].astype(str))
+
+    pl = t["plans"]
+    sub = pl[pl.plan_id.astype(str).isin(reached)].copy()
+    sub["outcome"] = np.where(sub.plan_id.astype(str).isin(passed), "통과", "반려")
+
+    g = (sub.groupby("outcome")
+            .agg(n=("plan_id", "size"), prep_days=("prep_days", "mean"))
+            .reset_index())
+    return g[g.n >= C.MIN_CELL_SAMPLE].sort_values("outcome")
+
+
 # ── 유지 퍼널 ─────────────────────────────────────────────────────
 # 단계 이름 -> 그 단계에 해당하는 plan_id 를 돌려주는 판정식.
 # **순서와 이름은 config.RETENTION_STEPS 가 정한다.** 여기는 판정식만 갖는다.
@@ -561,8 +672,8 @@ def cohort_compare(t: dict, base_year: int, comp_year: int) -> dict:
 
     # ── 3. 둘 다 통과 ────────────────────────────────────────────
     row.update(verdict="성공", color="ok",
-               reason=f"주지표 {d_primary:+.2f}%p 움직였고 가드레일 악화 "
-                      f"{worse:+.2f}%p (기준 {C.GUARDRAIL_MOVE}%p 미만)")
+               reason=f"주지표 {d_primary:+.2f}%p 움직였고, 가드레일은 "
+                      f"{worse:+.2f}%p로 기준 {C.GUARDRAIL_MOVE}%p 미만입니다")
     return row
 
 

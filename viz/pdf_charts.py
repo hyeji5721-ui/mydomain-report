@@ -41,6 +41,11 @@ def use_korean_font() -> str:
     return name
 
 
+# funnel_png(5단계 고정, 3.4in)과 device_png(부서 수에 따라 최대 4.2in)가
+# 나란히 보일 때 높이가 달라 보였다 — 둘의 평균으로 고정해 높이를 맞춘다.
+BOTTLENECK_CHART_H = (3.4 + 4.2) / 2  # = 3.8in
+
+
 def _png(fig) -> bytes:
     buf = io.BytesIO()
     fig.savefig(buf, format="png", dpi=170, bbox_inches="tight",
@@ -51,7 +56,7 @@ def _png(fig) -> bytes:
 
 def funnel_png(f) -> bytes:
     use_korean_font()
-    fig, ax = plt.subplots(figsize=(7.2, 3.4))
+    fig, ax = plt.subplots(figsize=(7.2, BOTTLENECK_CHART_H))
     colors = [C.COLORS["block"] if b else C.BRAND["primary"] for b in f.is_bottleneck]
     y = range(len(f))
     ax.barh(list(y), f.n, color=colors, height=0.62)
@@ -75,7 +80,10 @@ def funnel_png(f) -> bytes:
 def device_png(g) -> bytes:
     use_korean_font()
     g = g.sort_values("전환율")
-    fig, ax = plt.subplots(figsize=(7.2, 0.62 * len(g) + 1.0))
+    # funnel_png 와 나란히 놓였을 때 높이가 달라 보이지 않도록 같은 고정
+    # 높이(BOTTLENECK_CHART_H)를 쓴다 — 카테고리 수와 무관하다. 이제 옆에
+    # 정확한 수치 표가 있어, 차트는 상대 비교용 보조 시각 자료면 된다.
+    fig, ax = plt.subplots(figsize=(7.2, BOTTLENECK_CHART_H))
     colors = [C.COLORS["block"] if v == g.전환율.min() else C.BRAND["primary"]
               for v in g.전환율]
     y = range(len(g))

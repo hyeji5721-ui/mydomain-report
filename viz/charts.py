@@ -66,7 +66,9 @@ def device_compare(g):
     ))
     fig.update_yaxes(showgrid=False, tickfont=dict(size=13))
     fig.update_xaxes(visible=False, range=[0, g.전환율.max() * 155])
-    return _base(fig, height=52 * len(g) + 40,
+    # 카테고리가 많은 축(부서·담당자)은 왼쪽 퍼널 차트 옆에서 지나치게 길어져
+    # 좌우 균형이 깨진다 — 360px로 상한을 둔다(짧은 축은 그대로 자연스러운 높이).
+    return _base(fig, height=min(52 * len(g) + 40, 360),
                  margin=dict(l=8, r=8, t=4, b=4))
 
 

@@ -57,21 +57,49 @@ KPI_DEFS = {
         "경고 70.0 · 위험 65.0 — 임의 지정, 통계적 산출 근거 없음"),
     "계획-실적 괴리율": (
         "plan_actuals.variance_pct 의 평균",
-        "경고 10.28 (347건 전체 중앙값) · 위험 16.76 (예산삭감연도 평균, n=169)"),
+        "경고 10.28 (347건 전체 중앙값) · 위험 16.76 (예산삭감연도 평균, n=169) · "
+        "표본 347/442건 (2026년 확정배포 95건은 실적 대조 기간이 아직 안 지나 결측)"),
     "유지율": (
         "final_status 가 확정배포 또는 확정배포대기 / plans 전체 행 수 × 100",
         "임계값 없음 — 판정 기준을 정하지 않아 회색(판정 없음)으로 뜬다"),
 }
 
 k = ui.guard(M.kpis, t)
+
+# ── 한눈에 요약 배너 ─────────────────────────────────────────────
+# 아래 섹션들이 각자 다시 계산하는 값을 여기서 한 번 더 구해 한 줄로 모은다 —
+# funnel()·cohort_cards() 모두 @st.cache_data 라 이중 호출 비용은 사실상 없다.
+if k and "전체 통과율" in k:
+    _v = k["전체 통과율"]
+    _bits = [f"전체 통과율 {_v['fmt'].format(_v['value'])}"
+             f"({ui.STATUS_TEXT[M.status_of('전체 통과율', _v['value'])]})"]
+
+    _f = ui.guard(M.funnel, t["plan_stage_events"])
+    if _f is not None and _f.is_bottleneck.any():
+        _bn = _f[_f.is_bottleneck].iloc[0]
+        _bi = max(int(_f.index[_f.label == _bn.label][0]), 1)
+        _prev = _f.iloc[_bi - 1]
+        _bits.append(f"병목 {_prev.label} → {_bn.label}")
+
+    _cards = ui.guard(M.cohort_cards, t) or []
+    if _cards:
+        _last = _cards[-1]
+        _bits.append(f"최근 코호트({_last['base']}→{_last['comp']}) 판정 {_last['verdict']}")
+
+    ui.callout(" · ".join(_bits), "info")
+
+ui.section("핵심 지표", "카드 3개 — 임계값 근거 없는 지표는 판정 없음(회색)으로 둔다")
 if k:
     m = ui.guard(M.monthly, t)
     cols = st.columns(len(k))
     for col, (name, v) in zip(cols, k.items()):
         with col:
             lv = M.status_of(name, v["value"])
-            st.markdown(ui.kpi_card(name, v["fmt"].format(v["value"]), "", lv),
-                        unsafe_allow_html=True)
+            # delta 는 일부러 안 넣는다 — kpis() 는 2022~2026 전체 누적 한
+            # 값이고 monthly() 는 코호트별 시계열이라, 최근 코호트 증감을
+            # 델타로 넣으면 헤드라인(누적값)과 다른 걸 비교하는 셈이 된다.
+            st.metric(name, v["fmt"].format(v["value"]), border=True)
+            st.markdown(ui.badge(lv), unsafe_allow_html=True)
             if name in KPI_DEFS:
                 calc, basis = KPI_DEFS[name]
                 with st.popover("정의", use_container_width=False):
@@ -87,10 +115,18 @@ if k:
         st.caption("config.THRESHOLDS 가 비어 있어 전부 정상으로 표시됩니다. "
                    "임계값을 채우면 색이 갈립니다.")
 
-# ── 획득 퍼널 ─────────────────────────────────────────────────────
-ui.section("획득 퍼널", "그레인을 먼저 확인한다")
-f = ui.guard(M.funnel, t["plan_stage_events"])
-if f is not None:
+st.divider()
+
+# ── 획득 · 유지 퍼널 (탭 + fragment) ────────────────────────────────
+# 필터(축·구간)를 바꾸면 각 탭 안쪽만 다시 그려진다 — 전후비교·채널효율은 안 건드림.
+# ⚠ query_params 갱신이 fragment 안에서 일어나, 맨 아래 "현재 화면 링크"(fragment
+# 밖)는 필터를 바꾼 직후 다음 전체 재실행 때까지 한 박자 늦게 따라온다.
+@st.fragment
+def _acq_tab() -> None:
+    ui.section("획득 퍼널", "그레인을 먼저 확인한다")
+    f = ui.guard(M.funnel, t["plan_stage_events"])
+    if f is None:
+        return
     left, right = st.columns([1.15, 1])
     with left:
         st.plotly_chart(charts.funnel_bars(f), width="stretch",
@@ -104,11 +140,21 @@ if f is not None:
             f"<b>{(1-bn.step_rate)*100:.1f}%가 이탈</b>합니다.")
 
     with right:
-        # 분해 축 세 개. 맨 앞이 기본으로 선택된다.
-        #   department_name  부서 15개  (departments 에 있음) — 기본 축
-        #   division_type    사업부 9 / 지원부서 6  (departments 에 있음)
-        #   cycle_year       2022~2026, 예산삭감연도 2023·2025 여부
-        DIMS = ["department_name", "division_type", "cycle_year"]
+        # 분해 축. 맨 앞이 기본으로 선택된다.
+        #   department_name  부서 15개  (departments 에 있음) — 기본 축. 화면 표시는 "팀명"
+        #   cycle_year       2022~2026, 예산삭감연도 2023·2025 여부. 화면 표시는 "연도"
+        #   담당자           reviewer_id — 2026-09-05 추가. "구간"의 도착 단계 담당자별
+        #   사전설명회       pre_briefing — 2026-09-05 추가. 병목 구간(경영진검토→
+        #                    이사회승인) 원인 후보. 담당자와 달리 이건 개인이 아니라
+        #                    "사전 설명회를 의무화한다"처럼 바로 개입할 수 있는 축이다.
+        #                    지금은 그 병목 구간에만 값이 있다 — 다른 구간(94~96%
+        #                    통과)은 조사할 문제가 없어 채우지 않았다.
+        # division_type(사업부/지원부서)은 2026-09-05 에 화면에서 뺐다 — 판정 축이
+        # 아니었고(개입 불가능해서, CLAUDE.md 참고) 같은 구간 격차도 0.2%p라 화면
+        # 후보 가치도 낮다고 다시 판단함. funnel_by() 자체는 그대로 둔다(호출부만 뺌).
+        DIMS = ["department_name", "cycle_year", "담당자", "사전설명회"]
+        DIM_LABELS = {"department_name": "팀명", "cycle_year": "연도",
+                      "담당자": "담당자", "사전설명회": "사전 설명회"}
         DIM_DEFAULT = DIMS[0]
 
         # query_params 에서 초기값을 읽는다. 없거나 이상한 값이면 기본값.
@@ -118,6 +164,7 @@ if f is not None:
             _qp_dim = DIM_DEFAULT
 
         dim = st.segmented_control("분해 축", DIMS, default=_qp_dim,
+                                   format_func=lambda d: DIM_LABELS[d],
                                    label_visibility="collapsed")
         if dim not in DIMS:      # 다시 눌러 선택을 해제하면 None 이 온다
             dim = DIM_DEFAULT
@@ -127,9 +174,39 @@ if f is not None:
             "구간", range(len(f) - 1),
             format_func=lambda i: f"{f.label.iloc[i]} → {f.label.iloc[i+1]}",
             index=min(bi - 1, len(f) - 2))
-        # funnel_by() 는 t 전체를 받는다 — 축이 plans / departments 로
-        # 나뉘어 있어 함수가 직접 찾는다.
-        g = ui.guard(M.funnel_by, t, dim, f.step.iloc[i], f.step.iloc[i + 1])
+
+        if dim == "담당자":
+            # reviewer_pass_rate() 는 도착 단계 하나만 본다. "구간"의 도착
+            # 단계는 늘 담당자가 있는 단계(FUNNEL_STEPS[1:])라 그대로 쓴다.
+            rp = ui.guard(M.reviewer_pass_rate, t, f.step.iloc[i + 1])
+            g = None
+            if rp is not None and len(rp):
+                g = rp.rename(columns={"reviewer_id": "담당자", "n": "도달"})
+                g["전환율"] = g.pass_rate / 100
+                g["전환"] = (g.도달 * g.전환율).round().astype(int)
+                g["비중"] = g.도달 / g.도달.sum() if g.도달.sum() else float("nan")
+                g = g[["담당자", "도달", "전환", "전환율", "비중"]]
+        elif dim == "사전설명회":
+            # briefing_pass_rate() 는 지금 병목 구간(이사회승인)에만 값이 있다.
+            # 다른 구간을 고르면 표본 자체가 없어 빈 결과가 온다 — 조용히 안
+            # 그리면 "축이 고장났나" 오해할 수 있어 이유를 알려준다.
+            bp = ui.guard(M.briefing_pass_rate, t, f.step.iloc[i + 1])
+            g = None
+            if bp is not None and len(bp):
+                g = bp.rename(columns={"pre_briefing": "사전설명회", "n": "도달"})
+                g["전환율"] = g.pass_rate / 100
+                g["전환"] = (g.도달 * g.전환율).round().astype(int)
+                g["비중"] = g.도달 / g.도달.sum() if g.도달.sum() else float("nan")
+                g = g[["사전설명회", "도달", "전환", "전환율", "비중"]]
+            elif bp is not None:
+                ui.callout(
+                    "이 구간에는 사전 설명회 기록이 없습니다 — 지금은 병목 구간"
+                    "(경영진검토 → 이사회승인)에만 있습니다.", "info")
+        else:
+            # funnel_by() 는 t 전체를 받는다 — 축이 plans / departments 로
+            # 나뉘어 있어 함수가 직접 찾는다.
+            g = ui.guard(M.funnel_by, t, dim, f.step.iloc[i], f.step.iloc[i + 1])
+
         if g is not None and len(g):
             st.plotly_chart(charts.device_compare(g), width="stretch",
                             config={"displayModeBar": False})
@@ -143,26 +220,37 @@ if f is not None:
                     f"{hi[g.columns[0]]}({hi.전환율*100:.1f}%)보다 "
                     f"<b>{(hi.전환율-lo.전환율)*100:.1f}%p 낮습니다.</b>")
 
-# ── 유지 퍼널 ─────────────────────────────────────────────────────
-ui.section("유지 퍼널", "데려온 대상이 남는가")
-if not C.RETENTION_STEPS:
-    st.caption("config.RETENTION_STEPS 가 비어 있습니다. "
-               "7주차에 정한 유지·이탈의 정의를 옮기면 여기에 그려집니다.")
-rf = ui.guard(M.retention_funnel, t)
-if rf is not None and len(rf):
-    if "is_bottleneck" not in rf.columns:
-        rf = rf.assign(is_bottleneck=False)
-    c1, c2 = st.columns([1.15, 1])
-    with c1:
-        st.plotly_chart(charts.funnel_bars(rf), width="stretch",
-                        config={"displayModeBar": False})
-    with c2:
-        ui.callout(
-            "유지는 <b>관측 기간이 대상마다 다릅니다.</b> "
-            "먼저 들어온 대상은 오래 관측됐고 나중에 들어온 대상은 짧게 관측됐습니다. "
-            "<b>누적값으로 비교하면 기간의 그림자를 효과로 착각합니다.</b> "
-            "비율(단위 기간당)로 바꾸거나 같은 시점에 시작한 것끼리 묶으십시오.",
-            "info")
+
+@st.fragment
+def _retention_tab() -> None:
+    ui.section("유지 퍼널", "데려온 대상이 남는가")
+    if not C.RETENTION_STEPS:
+        st.caption("config.RETENTION_STEPS 가 비어 있습니다. "
+                   "7주차에 정한 유지·이탈의 정의를 옮기면 여기에 그려집니다.")
+    rf = ui.guard(M.retention_funnel, t)
+    if rf is not None and len(rf):
+        if "is_bottleneck" not in rf.columns:
+            rf = rf.assign(is_bottleneck=False)
+        c1, c2 = st.columns([1.15, 1])
+        with c1:
+            st.plotly_chart(charts.funnel_bars(rf), width="stretch",
+                            config={"displayModeBar": False})
+        with c2:
+            ui.callout(
+                "유지는 <b>관측 기간이 대상마다 다릅니다.</b> "
+                "먼저 들어온 대상은 오래 관측됐고 나중에 들어온 대상은 짧게 관측됐습니다. "
+                "<b>누적값으로 비교하면 기간의 그림자를 효과로 착각합니다.</b> "
+                "비율(단위 기간당)로 바꾸거나 같은 시점에 시작한 것끼리 묶으십시오.",
+                "info")
+
+
+_ftab1, _ftab2 = st.tabs(["획득 퍼널", "유지 퍼널"])
+with _ftab1:
+    _acq_tab()
+with _ftab2:
+    _retention_tab()
+
+st.divider()
 
 # ── 전후 비교 (실험이 없는 도메인) ──────────────────────────────────
 ui.section("전후 비교", "믿을 수 있는지 먼저 보고, 그 다음에 지표를 본다")
@@ -245,122 +333,16 @@ if res is not None and not res:
         if r.get("untrust"):
             if st.button("왜 감췄나", key=f"why_{r['base']}_{r['comp']}"):
                 why_hidden(r["untrust"])
-for r in (res or []):
-    cls = r["color"]
-    head = (f'<div class="exp {cls}">'
-            f'<div style="display:flex;align-items:flex-start;gap:12px">'
-            f'<div style="flex:1"><div class="id">{r["id"]}</div>'
-            f'<div class="nm">{r["name"]}</div>'
-            f'<div class="hy">{r["hypothesis"]}</div></div>'
-            f'<div>{ui.badge(cls, r["verdict"])}</div></div>')
+# 개별 실험 카드(forest plot·조기중단 시뮬레이터 포함)를 그리는 코드는 뺐다 —
+# 이 도메인엔 experiments/experiment_assignments 테이블 자체가 없어
+# M.experiment_results(t) 가 항상 빈 리스트를 돌려주므로, 그 카드는 실행될 일이
+# 없는 죽은 코드였다(위 "실험이 없어 전후 비교로 대신합니다" 분기만 실제로 탄다).
+# 2026-09-05 결정. metrics.py 의 experiment_results()·forest()/peeking()/
+# effect_decay() 는 그대로 둔다 — 화면 호출부만 뺐다(채널 효율 제거와 같은 방식).
 
-    if r["verdict"] == "무효":
-        # 못 믿을 실험의 숫자는 보여주지 않는다.
-        # 계산해 놓고 숨기는 것이 아니라 계산 자체를 하지 않았다.
-        head += (f'<div class="blocked"><b>✕ 지표를 표시하지 않습니다</b><br>'
-                 f'{r["reason"]}</div>')
-        st.markdown(head + "</div>", unsafe_allow_html=True)
-        continue
-
-    if "rc" not in r:
-        head += (f'<div style="margin-top:12px;font-size:13px;color:#64748b">'
-                 f'{r.get("reason", "")}</div>')
-        st.markdown(head + "</div>", unsafe_allow_html=True)
-        continue
-
-    head += (f'<div style="margin-top:14px;display:flex;gap:28px;'
-             f'align-items:baseline;flex-wrap:wrap">'
-             f'<div><div style="font-size:11px;color:#64748b">{r["primary"]}</div>'
-             f'<div class="mv">{r["rc"]*100:.2f}% → {r["rt"]*100:.2f}%</div></div>'
-             f'<div><div style="font-size:11px;color:#64748b">상대 효과</div>'
-             f'<div class="mv">{r["lift"]*100:+.1f}%</div></div>'
-             f'<div><div style="font-size:11px;color:#64748b">p값</div>'
-             f'<div class="mv">{r["p"]:.4f}</div></div>'
-             f'<div><div style="font-size:11px;color:#64748b">표본</div>'
-             f'<div style="font-size:13px;color:#475569" class="num">'
-             f'{r["nc"]:,} / {r["nt"]:,}</div></div></div>')
-    st.markdown(head + "</div>", unsafe_allow_html=True)
-
-    c1, c2 = st.columns([1, 1.1])
-    with c1:
-        st.caption("효과 크기와 95% 신뢰구간 (0을 지나면 유의하지 않음)")
-        st.plotly_chart(charts.forest(r), width="stretch",
-                        config={"displayModeBar": False}, key=f"fr_{r['id']}")
-    with c2:
-        if r.get("guard"):
-            gd = r["guard"]
-            bad = gd["delta"] < -0.03
-            st.markdown(
-                f'<div class="card tight" style="border-color:'
-                f'{C.COLORS["warn"] if bad else C.BRAND["line"]}">'
-                f'<div style="font-size:11px;color:#64748b">가드레일 · {gd["name"]}</div>'
-                f'<div style="font-size:20px;font-weight:700;margin-top:4px" class="num">'
-                f'{gd["control"]*100:.1f}% → {gd["treatment"]*100:.1f}% '
-                f'<span style="color:{C.COLORS["warn"] if bad else C.COLORS["ok"]}">'
-                f'({gd["delta"]*100:+.1f}%p)</span></div>'
-                + ('<div class="note">주지표는 개선됐지만 가드레일이 무너졌습니다.</div>'
-                   if bad else
-                   '<div style="font-size:12px;color:#64748b;margin-top:6px">'
-                   '이상 없음</div>')
-                + '</div>', unsafe_allow_html=True)
-        elif r.get("reason"):
-            st.markdown(f'<div class="card tight">'
-                        f'<div style="font-size:13px;color:#64748b">{r["reason"]}</div>'
-                        f'</div>', unsafe_allow_html=True)
-
-    # 기간을 쪼개야 드러나는 것 — 초기 효과가 남아 있는가
-    w = M.weekly_effect(r, r["start"])
-    if not w.empty and len(w) >= 3:
-        with st.expander("기간을 쪼개서 보기 — 효과가 유지되는가"):
-            st.plotly_chart(charts.effect_decay(w), width="stretch",
-                            config={"displayModeBar": False})
-            ui.callout(
-                f"전체 평균은 <b>{r['lift']*100:+.1f}%</b>인데 "
-                f"초반 <b>{w.lift.iloc[0]*100:+.0f}%</b>에서 "
-                f"후반 <b>{w.lift.iloc[-1]*100:+.0f}%</b>로 갑니다. "
-                f"기간 평균만 보면 안 보이는 것입니다.")
-
-    # 그때 멈췄다면 무엇을 봤을까
-    pc = M.peeking_curve(r, r["start"])
-    if not pc.empty and len(pc) >= 3:
-        with st.expander("만약 여기서 멈췄다면? — 조기 중단 시뮬레이터"):
-            cuts = list(pc.cut.astype(int))
-            sel = st.select_slider("실험 종료일", options=cuts, value=cuts[0],
-                                   key=f"peek_{r['id']}")
-            row = pc[pc.cut == sel].iloc[0]
-            a, b = st.columns([1, 1.4])
-            with a:
-                lv = "warn" if row.sig else "none"
-                st.markdown(
-                    ui.kpi_card(f"{sel}일차에 종료했다면", f"{row.lift*100:+.1f}%",
-                                "유의 — 성공으로 보고" if row.sig
-                                else "유의하지 않음", lv),
-                    unsafe_allow_html=True)
-                st.caption(f"p = {row.p:.3f}")
-            with b:
-                st.plotly_chart(charts.peeking(pc, r["lift"]), width="stretch",
-                                config={"displayModeBar": False})
-            ui.callout("종료 시점은 실험을 **시작하기 전에** 정해야 합니다.")
-
-# ── 채널 효율 (선택 과제) ─────────────────────────────────────────
-ui.section("획득 경로 효율", "비용만 보면 순위가 뒤집힌다")
-ce = ui.guard(M.channel_efficiency, t)
-if ce is not None and len(ce):
-    c1, c2 = st.columns([1.3, 1])
-    with c1:
-        st.plotly_chart(charts.cac_compare(ce), width="stretch",
-                        config={"displayModeBar": False})
-    with c2:
-        naive = list(ce.sort_values("CAC").channel)
-        real = list(ce.sort_values("유효CAC").channel)
-        st.markdown(
-            f'<div class="card tight">'
-            f'<div style="font-size:12px;color:#64748b">단순 비용 순위</div>'
-            f'<div style="font-size:14px;margin:4px 0 12px">{" < ".join(naive)}</div>'
-            f'<div style="font-size:12px;color:#64748b">유지율 반영 순위</div>'
-            f'<div style="font-size:14px;font-weight:700;color:{C.COLORS["block"]}">'
-            f'{" < ".join(real)}</div></div>', unsafe_allow_html=True)
-        st.caption("비용은 가정값입니다. 리포트에 쓸 때 '가정값 기반'을 남기십시오.")
+# 채널 효율(Day3 선택 과제)은 뺐다 — 이 도메인엔 "유입 채널" 개념이 없다
+# (부서×과제 단위 데이터라 획득 경로 구분이 존재하지 않는다). 2026-09-05 결정.
+# metrics.channel_efficiency() 는 여전히 스텁으로 남아 있다 — 화면에서만 뺐다.
 
 # ── 현재 화면 링크 ────────────────────────────────────────────────
 # 위에서 정리한 두 필터(dim · year)가 이미 st.query_params 에 반영된 뒤라,

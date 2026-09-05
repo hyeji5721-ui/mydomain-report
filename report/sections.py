@@ -13,6 +13,7 @@
 """
 from __future__ import annotations
 
+import re
 from collections import Counter
 from datetime import datetime
 
@@ -42,6 +43,15 @@ def check_phrasing(text: str) -> list[str]:
     return [w for w in BANNED if w in text]
 
 
+def check_placeholders(text: str) -> list[str]:
+    """예시 문장의 [ ] 자리표시자가 안 지워지고 남았는지 검사한다.
+
+    **그대로 쓴다.** check_phrasing() 과 같은 자리다 — 저장을 막지 않고
+    경고만 한다. 채우거나 지우는 것은 사람의 몫이다.
+    """
+    return re.findall(r"\[([^\[\]]*)\]", text)
+
+
 def _fmt(n, unit=""):
     return f"{n:,.0f}{unit}"
 
@@ -59,13 +69,22 @@ def _s1_summary(t: dict) -> dict:
     다시 계산하거나 외워 적지 않는다. kpis() 가 지표를 더하거나 빼도 이
     함수는 그대로 맞게 돈다.
 
-    반환: {"title": "1. 요약", "kind": "auto", "body": "..."}
+    ★ 2026-09-05: 지표를 "kpi_cards"(카드용 구조화 값)로도 반환한다 — 화면
+    (st.metric)과 PDF(색 있는 박스)가 각자 강조해서 그린다("tables"와 같은
+    화면/PDF 분리 패턴). 값은 카드가 이미 크게 보여주므로 body 의 불릿 나열은
+    없애고 짧은 안내 한 줄만 남겼다 — 같은 숫자를 텍스트로 또 나열하면 카드
+    바로 위에서 중복된다.
+
+    반환: {"title": "1. 요약", "kind": "auto", "body": "...", "kpi_cards": [...]}
     """
     k = M.kpis(t)
-    lines = "\n".join(f"- {name} {v['fmt'].format(v['value'])}"
-                       for name, v in k.items())
-    body = f"이 리포트가 보는 지표는 다음과 같습니다.\n{lines}"
-    return {"title": "1. 요약", "kind": "auto", "body": body}
+    kpi_cards = [
+        {"name": name, "value": v["fmt"].format(v["value"]),
+         "status": M.status_of(name, v["value"])}
+        for name, v in k.items()
+    ]
+    body = "이 리포트가 보는 지표는 아래와 같습니다."
+    return {"title": "1. 요약", "kind": "auto", "body": body, "kpi_cards": kpi_cards}
 
 
 def _s3_method(t: dict) -> dict:
@@ -121,35 +140,78 @@ def _s4_results(t: dict) -> dict:
     f.is_bottleneck 에서 매번 다시 찾는다 — 데이터가 바뀌어 병목이 옮겨가도
     이 문장이 따라간다.
 
+    2026-09-05 에 병목 원인 후보 표 둘을 더했다 — briefing_pass_rate()(사전
+    설명회 여부)·prep_days_by_outcome()(준비기간). **여전히 해석하지 않는다** —
+    "사전 설명회를 안 해서 반려됐다"는 문장은 안 쓰고, "실시 여부에 따라 통과율이
+    이렇게 갈린다"는 사실만 표로 보여준다. 인과 해석은 6장 몫이다. 둘 다 아직
+    병목 구간에만 값이 있는 컬럼이라(metrics.py 참고) 표본이 비면(다른 구간이면)
+    빈 리스트가 돼 표 자체를 안 붙인다.
+
+    단계별·부서별·원인 후보 숫자는 본문 텍스트가 아니라 "tables"(캡션 + 행
+    딕셔너리 목록의 리스트)로 반환한다 — 화면(st.dataframe)과 PDF(fpdf2
+    pdf.table())가 각자 표로 그린다. 2026-09-05 변경: 전엔 단계·부서 숫자 다
+    "- 라벨 N건 (…)" 줄글로 body 에 있었는데, 특히 부서별은 13줄이 그대로
+    나열돼 읽기 힘들다는 지적이 있었다.
+
     charts 키에 차트 이름을 넣으면 PDF에 그려진다.
     """
     f, bn, step_from, step_to, by_dept = _bottleneck_by_department(t)
 
-    lines = [f"- {f.label.iloc[0]} {int(f.n.iloc[0]):,}건"]
-    for _, row in f.iloc[1:].iterrows():
-        lines.append(
-            f"- {row.label} {int(row.n):,}건 "
-            f"(직전 단계 대비 {row.step_rate * 100:.2f}%, "
-            f"1단계 대비 누적 {row.cum_rate * 100:.2f}%)")
+    funnel_table = [
+        {"단계": row.label, "도달": int(row.n),
+         "직전 단계 대비": None if row.step_rate != row.step_rate
+                         else round(row.step_rate * 100, 2),
+         "1단계 대비 누적": round(row.cum_rate * 100, 2)}
+        for _, row in f.iterrows()
+    ]
 
     covered = float(by_dept.비중.sum())
-    dept_lines = [
-        f"- {getattr(r, by_dept.columns[0])} 도달 {int(r.도달):,}건 / "
-        f"전환 {int(r.전환):,}건 / 전환율 {r.전환율 * 100:.2f}%"
+    dim_col = by_dept.columns[0]
+    dept_table = [
+        {"부서": getattr(r, dim_col), "도달": int(r.도달), "전환": int(r.전환),
+         "전환율": round(r.전환율 * 100, 2)}
         for r in by_dept.sort_values("전환율").itertuples()
     ]
 
+    briefing = M.briefing_pass_rate(t, step_to)
+    briefing_table = [
+        {"사전 설명회": r.pre_briefing, "도달": int(r.n),
+         "전환율": round(r.pass_rate, 2)}
+        for r in briefing.itertuples()
+    ]
+
+    prep = M.prep_days_by_outcome(t, step_to)
+    prep_table = [
+        {"결과": r.outcome, "도달": int(r.n),
+         "평균 준비기간(일)": round(r.prep_days, 1)}
+        for r in prep.itertuples()
+    ]
+
     body = (
-        "퍼널 단계별 도달 수와 전환율입니다.\n" + "\n".join(lines) +
-        f"\n\n가장 낮은 전환율 구간은 {bn.label} 직전 단계 대비 "
+        "퍼널 단계별 도달 수와 전환율은 아래와 같습니다.\n\n"
+        f"가장 낮은 전환율 구간은 {bn.label} 직전 단계 대비 "
         f"{bn.step_rate * 100:.2f}%입니다.\n\n"
         f"이 구간({C.FUNNEL_LABELS.get(step_from, step_from)} → "
-        f"{C.FUNNEL_LABELS.get(step_to, step_to)})을 department_name 으로 "
-        f"나눈 값입니다 (표본 {C.MIN_CELL_SAMPLE}건 미만 부서는 제외, "
-        f"표시된 부서의 비중 합 {covered * 100:.1f}%).\n" +
-        "\n".join(dept_lines)
+        f"{C.FUNNEL_LABELS.get(step_to, step_to)})을 부서별로 나눈 값은 "
+        f"아래와 같습니다 (표본 {C.MIN_CELL_SAMPLE}건 미만 부서는 제외, "
+        f"표시된 부서의 비중 합 {covered * 100:.1f}%).\n\n"
+        "같은 구간을 사전 설명회 실시 여부·준비기간(착수~제출 소요일)으로 "
+        "나눈 값도 아래와 같습니다."
     )
+
+    tables = [
+        {"caption": "퍼널 단계별", "rows": funnel_table},
+        {"caption": f"{bn.label} 직전 구간 부서별 분해", "rows": dept_table},
+    ]
+    if briefing_table:
+        tables.append({"caption": f"{bn.label} 직전 구간 사전 설명회 여부별 전환율",
+                       "rows": briefing_table})
+    if prep_table:
+        tables.append({"caption": f"{bn.label} 직전 구간 통과/반려별 평균 준비기간",
+                       "rows": prep_table})
+
     return {"title": "4. 결과", "kind": "auto", "body": body,
+            "tables": tables,
             "charts": ["funnel", "device"]}
 
 
@@ -237,7 +299,8 @@ def _limits_rows(t: dict) -> list[dict]:
     for r in M.cohort_cards(t):
         if r.get("untrust"):
             rows.append({"출처": "못 한 것",
-                        "내용": f"{r['base']} → {r['comp']} 코호트: {r['reason']}"})
+                        "내용": (f"{r['base']} → {r['comp']} 코호트는 가드레일을 "
+                               f"판정하지 못했습니다 — {r['reason']}.")})
 
     pl, pa = t["plans"], t["plan_actuals"]
     confirmed = pl.loc[pl.final_status == "확정배포", "plan_id"].astype(str)
@@ -306,7 +369,8 @@ def _guide_background(t: dict) -> list[str]:
     _, bn, step_from, step_to, _ = _bottleneck_by_department(t)
     cards = M.cohort_cards(t)
     lines = [
-        f"{name} {v['fmt'].format(v['value'])} (판정: {M.status_of(name, v['value'])})"
+        f"{name} {v['fmt'].format(v['value'])} "
+        f"(판정: {_STATUS_KO[M.status_of(name, v['value'])]})"
         for name, v in k.items()
     ]
     lines.append(
@@ -320,7 +384,8 @@ def _guide_background(t: dict) -> list[str]:
 
 
 def _guide_interpretation(t: dict) -> list[str]:
-    """6. 해석 가이드 재료 — 병목 구간의 부서별 격차와 코호트 판정 분포만 보여준다."""
+    """6. 해석 가이드 재료 — 병목 구간의 부서별 격차·원인 후보(사전 설명회·
+    준비기간)·코호트 판정 분포를 보여준다."""
     _, bn, step_from, step_to, by_dept = _bottleneck_by_department(t)
     worst = by_dept.sort_values("전환율").head(3)
     dim = by_dept.columns[0]
@@ -328,8 +393,23 @@ def _guide_interpretation(t: dict) -> list[str]:
         f"가장 낮은 전환율 구간: {C.FUNNEL_LABELS.get(step_from, step_from)} → "
         f"{C.FUNNEL_LABELS.get(step_to, step_to)} ({bn.step_rate * 100:.2f}%)",
     ]
-    lines += [f"이 구간에서 전환율이 가장 낮은 부서: {r[dim]} {r.전환율 * 100:.2f}%"
-             for _, r in worst.iterrows()]
+    lines.append(
+        "이 구간에서 전환율이 가장 낮은 부서 3곳: " +
+        ", ".join(f"{r[dim]} {r.전환율 * 100:.2f}%" for _, r in worst.iterrows()))
+
+    briefing = M.briefing_pass_rate(t, step_to)
+    if len(briefing):
+        lines.append(
+            "같은 구간 사전 설명회 여부별 전환율: " +
+            ", ".join(f"{r.pre_briefing} {r.pass_rate:.2f}%"
+                     for r in briefing.itertuples()))
+    prep = M.prep_days_by_outcome(t, step_to)
+    if len(prep):
+        lines.append(
+            "같은 구간 통과/반려별 평균 준비기간: " +
+            ", ".join(f"{r.outcome} {r.prep_days:.1f}일"
+                     for r in prep.itertuples()))
+
     counts = Counter(r["verdict"] for r in M.cohort_cards(t))
     lines.append("전후 비교 코호트 판정 분포: " +
                 ", ".join(f"{k} {v}건" for k, v in counts.items()))
@@ -352,9 +432,92 @@ def _guide_proposal(t: dict) -> list[str]:
         f"{C.FUNNEL_LABELS.get(step_to, step_to)}) 판정 대상 부서 {len(by_dept)}개 "
         f"(표본 {C.MIN_CELL_SAMPLE}건 미만 부서는 4장에서 제외)",
     ]
+    briefing = M.briefing_pass_rate(t, step_to)
+    if len(briefing):
+        lines.append(
+            "같은 구간 사전 설명회 여부별 전환율: " +
+            ", ".join(f"{r.pre_briefing} {r.pass_rate:.2f}%"
+                     for r in briefing.itertuples()) +
+            " — 개입 가능한 프로세스 레버 후보")
     if attention:
         lines.append("전후 비교에서 주의가 필요한 코호트: " + ", ".join(attention))
     return lines
+
+
+# 예시 문장 — 텍스트 박스의 초기값으로 그대로 들어간다(순수 텍스트라 HTML
+# 태그를 안 쓴다). 가이드의 사실을 문장으로 옮긴 부분까지만 완성하고, 판단이
+# 들어가는 부분은 [...] 로 비워 둔다 — 그대로 제출하면 대괄호가 리포트에
+# 그대로 실리므로, 저장 전에 반드시 채우거나 지워야 한다(pages/3_리포트.py 참고).
+_STATUS_KO = {"ok": "정상", "warn": "주의", "block": "차단", "none": "판정 없음"}
+
+
+def _i_ga(word: str) -> str:
+    """받침 유무로 주격 조사 '이/가' 를 고른다. 지표 이름을 "…이 판정됐습니다"
+    처럼 피동문 주어 자리에 그대로 끼워 넣을 때 쓴다."""
+    if not word:
+        return "가"
+    code = ord(word[-1]) - 0xAC00
+    has_batchim = 0 <= code < 11172 and code % 28 != 0
+    return "이" if has_batchim else "가"
+
+
+def _example_background(t: dict) -> str:
+    """2. 배경 예시. 사실만 문장으로 옮기고, "왜 하는가"는 괄호로 남긴다.
+
+    줄바꿈: 서두 문장 → 지표 불릿 → 빈 줄 → 판단 질문. 한 문장에 다 몰아
+    쓰면 텍스트 박스 안에서 읽기 어렵다.
+    """
+    k = M.kpis(t)
+    _, bn, step_from, step_to, _ = _bottleneck_by_department(t)
+    bullets = [f"- {name} {v['fmt'].format(v['value'])}"
+              f"({_STATUS_KO[M.status_of(name, v['value'])]})"
+              for name, v in k.items()]
+    bullets.append(
+        f"- 병목 구간: {C.FUNNEL_LABELS.get(step_from, step_from)} → "
+        f"{C.FUNNEL_LABELS.get(step_to, step_to)} "
+        f"(직전 단계 대비 {bn.step_rate * 100:.2f}%)")
+    return (
+        "2026년 경영계획 수립 결과를 검토하기 위해 이 분석을 진행했습니다.\n\n"
+        + "\n".join(bullets) +
+        "\n\n[어떤 의사결정을 앞두고 이 분석을 하는지 적으십시오]")
+
+
+def _example_interpretation(t: dict) -> str:
+    """6. 해석 예시. 원인을 단정하지 않고 "가릴 수 없다"로 맺어, 판단은 넘긴다.
+
+    줄바꿈: 사실 문장 → (있으면) 원인 후보 문장 → 빈 줄 뒤에 판단 질문.
+
+    2026-09-05: 병목 구간에 원인 후보(사전 설명회·준비기간)가 생겨 한 줄 더
+    넣었다 — 상관이지 인과가 아니므로("사전 설명회를 안 해서 반려됐다"는 못
+    쓴다) "뚜렷한 차이가 있다"까지만 쓰고, "가릴 수 없다"는 맺음은 그대로 둔다.
+    아직 그 구간에 원인 후보 데이터가 없으면(병목이 옮겨가면) 이 줄은 빠진다.
+    """
+    _, bn, step_from, step_to, _ = _bottleneck_by_department(t)
+    briefing = M.briefing_pass_rate(t, step_to)
+    extra = ("같은 구간에서 사전 설명회 실시 여부·준비기간과도 뚜렷한 차이가 "
+             "있습니다.\n") if len(briefing) else ""
+    return (
+        f"병목 구간({C.FUNNEL_LABELS.get(step_from, step_from)} → "
+        f"{C.FUNNEL_LABELS.get(step_to, step_to)}) 전환율이 부서에 따라 갈리고 있습니다.\n"
+        f"{extra}"
+        "이 데이터만으로는 그 격차가 제도 차이인지, 부서 특성인지, 우연인지 가릴 수 없습니다.\n\n"
+        "[왜 이런 격차가 났다고 보는지, 추가로 무엇을 확인해야 하는지 적으십시오]")
+
+
+def _example_proposal(t: dict) -> str:
+    """8. 제안 예시. "할 것"과 "안 할 것"이 둘 다 있는 형태를 보여준다.
+
+    줄바꿈: 근거 한 줄 → 빈 줄 → "할 것"/"안 할 것" 두 줄로 나눠, 선택지가
+    하나의 뒤엉킨 문장이 아니라 서로 다른 두 결정임을 눈으로 보이게 한다.
+    """
+    k = M.kpis(t)
+    flagged = [name for name, v in k.items()
+              if M.status_of(name, v["value"]) in ("warn", "block")]
+    subject = flagged[0] if flagged else "주의가 필요한 지표"
+    return (
+        f"{subject}{_i_ga(subject)} 주의 단계로 판정됐습니다.\n\n"
+        "할 것: [무엇을 할지 — 예: 매월 모니터링한다]\n"
+        "안 할 것: [무엇을 안 할지 — 예: 원인이 아직 불명확하므로 제도 변경은 보류한다]")
 
 
 def _s2_background(t: dict, human: dict) -> dict:
@@ -363,6 +526,7 @@ def _s2_background(t: dict, human: dict) -> dict:
         "body": human.get("2. 배경", ""),
         "placeholder": "이 분석을 왜 했는지, 어떤 의사결정을 앞두고 있는지 적으십시오.",
         "guide": _guide_background(t), "guide_disclaimer": GUIDE_DISCLAIMER,
+        "example": _example_background(t),
     }
 
 
@@ -375,6 +539,7 @@ def _s6_interpretation(t: dict, human: dict) -> dict:
                         "두 지표를 엮어 쓸 때는 \"A 때문에 B\" 대신 "
                         "\"A가 낮은 구간에서 B도 낮다\"처럼 쓰십시오."),
         "guide": _guide_interpretation(t), "guide_disclaimer": GUIDE_DISCLAIMER,
+        "example": _example_interpretation(t),
     }
 
 
@@ -385,6 +550,7 @@ def _s8_proposal(t: dict, human: dict) -> dict:
         "placeholder": ("무엇을 할 것인지, 무엇을 하지 않을 것인지 적으십시오. "
                         "선택하지 않으면 제안이 아니라 보고입니다."),
         "guide": _guide_proposal(t), "guide_disclaimer": GUIDE_DISCLAIMER,
+        "example": _example_proposal(t),
     }
 
 

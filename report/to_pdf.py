@@ -21,10 +21,41 @@ INK = (15, 23, 42)
 MUTED = (100, 116, 139)
 LINE = (226, 232, 240)
 
+# 표의 숫자 열 중 %로 찍을 것. 여기 없는 float 열(예: 준비기간의 "일")은
+# 그냥 소수 한 자리로만 찍는다 — %를 붙이면 단위가 아닌데 % 처럼 보인다.
+PERCENT_HEADERS = {"전환율", "직전 단계 대비", "1단계 대비 누적"}
+
 
 def _hex(h):
     h = h.lstrip("#")
     return tuple(int(h[i:i + 2], 16) for i in (0, 2, 4))
+
+
+def _kpi_cards(pdf, cards: list[dict]) -> None:
+    """1장 지표를 색 있는 박스 3개로 그린다. 화면의 st.metric+badge와 같은 역할이다."""
+    gap = 6
+    total_w = pdf.w - pdf.l_margin - pdf.r_margin
+    card_w = (total_w - gap * (len(cards) - 1)) / len(cards)
+    h = 26
+    y0 = pdf.get_y()
+    if y0 + h > pdf.h - pdf.b_margin:
+        pdf.add_page()
+        y0 = pdf.get_y()
+    for i, c in enumerate(cards):
+        x = pdf.l_margin + i * (card_w + gap)
+        color = _hex(C.COLORS.get(c["status"], C.COLORS["none"]))
+        pdf.set_draw_color(*LINE)
+        pdf.set_line_width(0.3)
+        pdf.rect(x, y0, card_w, h)
+        pdf.set_xy(x + 4, y0 + 4)
+        pdf.set_font(pdf.base, "B", 15)
+        pdf.set_text_color(*color)
+        pdf.cell(card_w - 8, 8, c["value"], align="L")
+        pdf.set_xy(x + 4, y0 + 13)
+        pdf.set_font(pdf.base, "", 9)
+        pdf.set_text_color(*MUTED)
+        pdf.multi_cell(card_w - 8, 4.5, c["name"])
+    pdf.set_xy(pdf.l_margin, y0 + h + 6)
 
 
 class Report(FPDF):
@@ -61,9 +92,11 @@ def build_pdf(sections: list[dict], charts: dict[str, bytes],
               title: str = "성장 성과 분석") -> bytes:
     pdf = Report()
 
-    # ── 표지 ──────────────────────────────────────────────────────
+    # ── 표지 + 목차 (한 페이지) ──────────────────────────────────────
+    # 2026-09-05: 전엔 표지·목차가 각각 페이지 하나씩(둘 다 절반 이상 빈 공간)
+    # 이었다 — 합쳐서 첫 페이지 낭비를 줄인다.
     pdf.add_page()
-    pdf.ln(64)
+    pdf.ln(40)
     pdf.set_font(pdf.base, "B", 26)
     pdf.set_text_color(*INK)
     pdf.multi_cell(0, 12, title, align="L")
@@ -76,13 +109,13 @@ def build_pdf(sections: list[dict], charts: dict[str, bytes],
     pdf.set_draw_color(*_hex(C.BRAND["primary"]))
     pdf.set_line_width(1.2)
     pdf.line(pdf.l_margin, pdf.get_y(), pdf.l_margin + 40, pdf.get_y())
-    pdf.ln(14)
+    pdf.ln(10)
     pdf.set_font(pdf.base, "", 10)
     pdf.set_text_color(*MUTED)
-    pdf.cell(0, 6, f"생성 {datetime.now().strftime('%Y-%m-%d %H:%M')}")
+    pdf.cell(0, 6, f"생성 {datetime.now().strftime('%Y-%m-%d %H:%M')}",
+             new_x="LMARGIN", new_y="NEXT")
 
-    # ── 목차 ──────────────────────────────────────────────────────
-    pdf.add_page()
+    pdf.ln(20)
     pdf.set_font(pdf.base, "B", 15)
     pdf.set_text_color(*INK)
     pdf.cell(0, 10, "목차", new_x="LMARGIN", new_y="NEXT")
@@ -94,8 +127,17 @@ def build_pdf(sections: list[dict], charts: dict[str, bytes],
         pdf.cell(0, 8, s["title"] + mark, new_x="LMARGIN", new_y="NEXT")
 
     # ── 본문 ──────────────────────────────────────────────────────
-    for s in sections:
-        pdf.add_page()
+    # 장마다 무조건 새 페이지로 넘기지 않는다 — 짧은 장(6·8장 등)이 페이지를
+    # 통째로 낭비했다. 첫 장만 새 페이지로 시작하고, 그 다음부터는 남은 공간이
+    # 부족할 때만(제목+구분선이 겨우 들어갈 정도) 페이지를 넘긴다. 중간에
+    # 표·차트가 넘치는 것은 set_auto_page_break 가 알아서 처리한다.
+    for i, s in enumerate(sections):
+        if i == 0:
+            pdf.add_page()
+        elif pdf.get_y() > pdf.h - pdf.b_margin - 45:
+            pdf.add_page()
+        else:
+            pdf.ln(12)
         pdf.set_font(pdf.base, "B", 15)
         pdf.set_text_color(*INK)
         pdf.multi_cell(0, 9, s["title"])
@@ -117,6 +159,45 @@ def build_pdf(sections: list[dict], charts: dict[str, bytes],
         for para in body.split("\n\n"):
             pdf.multi_cell(0, 6.2, para.strip())
             pdf.ln(3)
+
+        if s.get("kpi_cards"):
+            _kpi_cards(pdf, s["kpi_cards"])
+
+        for tbl in s.get("tables", []):
+            rows = tbl.get("rows") or []
+            if not rows:
+                continue
+            if pdf.get_y() > 210:
+                pdf.add_page()
+            if tbl.get("caption"):
+                pdf.set_font(pdf.base, "B", 9.5)
+                pdf.set_text_color(*MUTED)
+                pdf.cell(0, 6, tbl["caption"], new_x="LMARGIN", new_y="NEXT")
+                pdf.ln(1)
+            headers = list(rows[0].keys())
+            pdf.set_font(pdf.base, "", 9.5)
+            pdf.set_text_color(*INK)
+            with pdf.table(line_height=6,
+                          borders_layout="SINGLE_TOP_LINE") as pdf_table:
+                head_row = pdf_table.row()
+                for h in headers:
+                    head_row.cell(h, align="LEFT" if h == headers[0] else "RIGHT")
+                for r in rows:
+                    row = pdf_table.row()
+                    for h in headers:
+                        v = r[h]
+                        if h == headers[0] or isinstance(v, str):
+                            text = str(v)
+                        elif v is None:
+                            text = "-"
+                        elif isinstance(v, int):
+                            text = f"{v:,}건"
+                        elif h in PERCENT_HEADERS:
+                            text = f"{v:.2f}%"
+                        else:
+                            text = f"{v:.1f}"
+                        row.cell(text, align="LEFT" if h == headers[0] else "RIGHT")
+            pdf.ln(4)
 
         for key in s.get("charts", []):
             png = charts.get(key)

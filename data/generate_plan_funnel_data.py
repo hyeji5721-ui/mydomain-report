@@ -138,6 +138,85 @@ df_events.loc[old_idx, "event_date"] = None
 dup_rows = df_events.sample(frac=0.02, random_state=7)
 df_events = pd.concat([df_events, dup_rows], ignore_index=True)
 
+# ---------- 3-1. 승인자 식별자 · 단계별 통과 조건(심사점수) ----------
+# 별도 rng2 를 써서 위 생성 로직(rng)의 소비 순서에 전혀 손대지 않는다 —
+# plans/plan_actuals 의 기존 수치(CLAUDE.md 에 이미 적힌 값)가 그대로 재현되어야 한다.
+# 완전중복 64행이 새 컬럼에서도 완전히 같은 값을 갖도록, event_id 단위로 한 번만
+# 뽑아 병합한다(중복 행이 서로 다른 심사점수를 갖게 되면 "완전중복"이 깨진다).
+rng2 = np.random.default_rng(4242)
+PASS_THRESHOLD = 60  # 단계별 통과 조건: 심사점수 60점 이상이면 통과
+
+REVIEWER_POOL = {
+    "예산실1차조정": [f"B{n:02d}" for n in range(1, 7)],   # 예산실 담당자 6명
+    "경영진검토":     [f"E{n:02d}" for n in range(1, 6)],   # 경영진 검토위원 5명
+    "이사회승인":     [f"M{n:02d}" for n in range(1, 10)],  # 이사회 위원 9명
+    "확정배포":       [f"F{n:02d}" for n in range(1, 4)],   # 확정배포 담당자 3명
+}
+
+unique_events = df_events.drop_duplicates("event_id").sort_values("event_id")
+reviewer_ids, review_scores = [], []
+for _, erow in unique_events.iterrows():
+    stage, result = erow["stage_name"], erow["result"]
+    if stage == "부서초안제출" or result == "철회":
+        # 부서초안제출은 자체 제출(심사 없음), 철회는 심사 전 자진 철회 — 둘 다 승인자가 없다
+        reviewer_ids.append(None)
+        review_scores.append(np.nan)
+        continue
+    pool = REVIEWER_POOL[stage]
+    reviewer_ids.append(pool[rng2.integers(0, len(pool))])
+    if result == "통과":
+        review_scores.append(int(rng2.integers(PASS_THRESHOLD, 101)))
+    else:  # 반려
+        review_scores.append(int(rng2.integers(20, PASS_THRESHOLD)))
+
+unique_events = unique_events.assign(reviewer_id=reviewer_ids, review_score=review_scores)
+df_events = df_events.merge(
+    unique_events[["event_id", "reviewer_id", "review_score"]], on="event_id", how="left")
+
+# ---------- 3-2. 병목 원인 후보 ①·②·③ — 사전설명회·준비기간·신규사업 여부 ----------
+# **세 번째 독립 생성기 rng3.** rng2 에 이 draw 들을 더 넣으면(호출 순서가 조건부라)
+# 그 뒤에 나오는 reviewer_id/review_score draw 가 밀려서 값이 바뀐다 — 실제로 한 번
+# rng2 에 얹었다가 review_score 가 통째로 달라지는 걸 확인하고 되돌렸다. rng(원본)뿐
+# 아니라 rng2(승인자·심사점수)의 기존 값도 그대로 지켜야 하므로 완전히 새 스트림을 쓴다.
+#
+#   pre_briefing    사전 설명회 실시 여부. ① 후보 — 이사회승인 단계에서 그 이벤트가
+#                   통과면 사전 설명회를 했을 확률을 높게, 반려면 낮게 둬서 "사전
+#                   설명회를 한 안건이 통과율이 높다"가 분석에서 드러나게 한다.
+#   prep_days       준비기간(착수~제출 소요일). ② 후보 — 이사회승인 단계에서 최종
+#                   통과한 계획안은 준비기간을 넉넉하게, 끝내 반려된 계획안은 짧게
+#                   줘서 "준비기간이 짧을수록 반려율이 높다"가 드러나게 한다.
+#   is_new_business 신규 사업 여부. ③ 후보지만 **결과와 무관하게 무작위로** 둔다 —
+#                   division_type 처럼 "확인했지만 무관했다"는 대조군 역할이다.
+rng3 = np.random.default_rng(7331)
+
+# pre_briefing 도 event_id 단위로 한 번만 뽑아 병합한다 — 완전중복 64행이 여기서도
+# 같은 값을 갖게 하려는 것(reviewer_id·review_score 와 같은 이유).
+board_unique = unique_events[unique_events.stage_name == "이사회승인"]
+pre_briefings = [
+    "예" if rng3.random() < (0.70 if r == "통과" else 0.30) else "아니오"
+    for r in board_unique["result"]
+]
+board_unique = board_unique.assign(pre_briefing=pre_briefings)
+df_events = df_events.merge(
+    board_unique[["event_id", "pre_briefing"]], on="event_id", how="left")
+
+board_events = df_events[df_events.stage_name == "이사회승인"]
+passed_board = set(board_events.loc[board_events.result == "통과", "plan_id"])
+reached_board = set(board_events["plan_id"])
+
+prep_days_list, new_business_list = [], []
+for plan_id in df_plans["plan_id"]:
+    if plan_id in passed_board:
+        prep_days_list.append(int(rng3.integers(25, 91)))
+    elif plan_id in reached_board:
+        prep_days_list.append(int(rng3.integers(7, 46)))
+    else:
+        prep_days_list.append(int(rng3.integers(7, 91)))  # 이 단계에 도달 못 함 — 신호 없음
+    new_business_list.append("예" if rng3.random() < 0.25 else "아니오")
+
+df_plans["prep_days"] = prep_days_list
+df_plans["is_new_business"] = new_business_list
+
 # ---------- 4. plan_actuals (확정배포 + 2025년 이전 사이클만 실적 확정) ----------
 actual_rows = []
 for _, prow in df_plans.iterrows():

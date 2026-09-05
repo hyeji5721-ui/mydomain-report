@@ -148,7 +148,7 @@ if run["step"] >= 3 and not gates.is_passed(run, 1):
              '되돌릴 수 있는 게이트입니다.</div></div>')
     st.markdown(body, unsafe_allow_html=True)
 
-    note = st.text_input("판단 근거 (기록에 남습니다)",
+    note = st.text_input("판단 근거 (기록에 남습니다, 필수)",
                          placeholder="예: 기존 고객은 퍼널 이력이 없는 것이 정상이므로 진행")
     a, b = st.columns([1, 1])
     with a:
@@ -156,12 +156,17 @@ if run["step"] >= 3 and not gates.is_passed(run, 1):
             st.session_state.run = None
             st.rerun()
     with b:
-        if st.button("통과시키기", type="primary", disabled=not s["can_pass"]):
+        if st.button("통과시키기", type="primary",
+                     disabled=not s["can_pass"] or not note.strip()):
             gates.pass_gate(run, 1, note)
             gates.advance(run, "게이트1")
+            gates.save(run)  # 되돌릴 수 있는 게이트라도, 판단은 여기서부터 기록에 남는다
             st.rerun()
     if not s["can_pass"]:
         st.error("차단 항목이 있어 통과할 수 없습니다.")
+    elif not note.strip():
+        st.error("판단 근거를 적어야 통과할 수 있습니다. \"확인함\" 같은 말은 근거가 아니다 — "
+                 "무엇을 보고 왜 괜찮다고 판단했는지 적으십시오.")
 
 # ── 4. 계산 ───────────────────────────────────────────────────────
 if gates.is_passed(run, 1):
@@ -202,7 +207,7 @@ if gates.is_passed(run, 1) and not gates.is_passed(run, 2):
                 f'계산 결과가 상식에 맞는지, 이전 기간과 크게 다르지 않은지 '
                 f'확인하십시오. 되돌릴 수 있습니다.</div></div>',
                 unsafe_allow_html=True)
-    note2 = st.text_input("판단 근거", key="g2",
+    note2 = st.text_input("판단 근거 (필수)", key="g2",
                           placeholder="예: 전환율 3.72%는 직전 분기와 유사")
     a, b = st.columns([1, 1])
     with a:
@@ -210,11 +215,15 @@ if gates.is_passed(run, 1) and not gates.is_passed(run, 2):
             gates.revert_gate(run, 2) or gates.revert_gate(run, 1)
             st.rerun()
     with b:
-        if st.button("통과시키기", type="primary", key="p2"):
+        if st.button("통과시키기", type="primary", key="p2",
+                     disabled=not note2.strip()):
             gates.pass_gate(run, 2, note2)
             gates.advance(run, "대시보드")
             gates.save(run)
             st.rerun()
+    if not note2.strip():
+        st.error("판단 근거를 적어야 통과할 수 있습니다. \"확인함\" 같은 말은 근거가 아니다 — "
+                 "무엇을 보고 왜 괜찮다고 판단했는지 적으십시오.")
 
 if gates.is_passed(run, 2):
     gates.advance(run, "리포트")

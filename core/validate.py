@@ -75,7 +75,8 @@ REQUIRED_COLS = {
     "plans": ["plan_id", "department_id", "cycle_year",
               "submitted_date", "planned_amount", "final_status"],
     "plan_stage_events": ["event_id", "plan_id", "stage_seq",
-                          "stage_name", "event_date", "result", "attempt_no"],
+                          "stage_name", "event_date", "result", "attempt_no",
+                          "reviewer_id", "review_score"],
     "plan_actuals": ["plan_id", "variance_pct"],
 }
 
