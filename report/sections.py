@@ -609,5 +609,5 @@ def email_draft(t: dict, sections: list[dict]) -> dict:
         f'<p style="font-size:14px;line-height:1.7;white-space:pre-line">'
         f'{summary}</p>'
         f'<p style="font-size:12px;color:#64748b;margin-top:20px">'
-        f'자동 생성 · {datetime.now().strftime("%Y-%m-%d %H:%M")}</p></div>')
+        f'자동 생성 · {datetime.now(C.KST).strftime("%Y-%m-%d %H:%M")}</p></div>')
     return {"to": C.EMAIL_TO_EXAMPLE, "subject": subject, "html": html}

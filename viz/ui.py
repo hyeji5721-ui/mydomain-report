@@ -170,7 +170,10 @@ def context_bar(run: dict | None, extra: dict | None = None) -> None:
     items = [("데이터셋", C.DATASET),
              ("기간", f"{C.PERIOD[0]} ~ {C.PERIOD[1]}")]
     if run:
-        items.append(("마지막 실행", run.get("started_at", "-").replace("T", " ")))
+        # started_at 은 이제 타임존을 포함한 isoformat이다(예: "...+09:00") —
+        # 화면엔 어차피 KST로 고정이라 뒤에 붙는 오프셋은 군더더기라 잘라낸다.
+        items.append(("마지막 실행",
+                     run.get("started_at", "-").replace("T", " ").split("+")[0]))
     for k, v in (extra or {}).items():
         items.append((k, v))
     html = '<div class="ctx">'

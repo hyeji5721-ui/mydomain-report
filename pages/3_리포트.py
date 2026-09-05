@@ -244,7 +244,7 @@ with c1:
             # ⚠ 파일 이름에만 쓰는 화면 표시용 시각이다. 지표·판정 계산에는
             # 현재 시각을 넣지 않는다 — 넣으면 같은 입력이 같은 결과를 내지
             # 않아 재현이 안 된다.
-            st.session_state.pdf_made_at = datetime.now()
+            st.session_state.pdf_made_at = datetime.now(C.KST)
             st.toast("리포트가 만들어졌습니다", icon="📄")
     if st.session_state.get("pdf"):
         made_at = st.session_state.pdf_made_at

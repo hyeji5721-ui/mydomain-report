@@ -33,12 +33,21 @@ config를 다 바꾸고 앱을 켜면 거기서 깨진다. **깨지는 것이 �
 비즈니스 파라미터(CHANNEL_CAC 등)만 통신사 값이 남아 있다 — 쓰이는 곳이
 선택 과제인 metrics.channel_efficiency() 뿐이라 그대로 두었다.
 """
+from datetime import timedelta, timezone
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
 DATA_DIR = ROOT / "data"          # 데이터 파일
 RUNS_DIR = ROOT / "runs"          # 실행 이력
 ASSETS_DIR = ROOT / "assets"      # 폰트 등
+
+# 화면·리포트에 찍는 "지금 시각"(실행 기록·생성 시각 등, 계산에는 안 쓴다)은
+# 전부 이 시간대로 고정한다. datetime.now()만 쓰면 서버가 어느 OS/시간대에서
+# 도는지에 따라 값이 달라진다 — 로컬(Windows, KST)에서는 맞게 보이다가
+# Streamlit Cloud(리눅스 컨테이너, 기본 UTC)에 배포하면 9시간 밀려 보인다.
+# 한국은 서머타임이 없어 고정 오프셋(+9)이면 충분하다 — zoneinfo/tzdata 같은
+# 추가 의존성도 필요 없다.
+KST = timezone(timedelta(hours=9))
 
 # ── 데이터 ────────────────────────────────────────────────────────
 # ★ Day1 — 명세 1행

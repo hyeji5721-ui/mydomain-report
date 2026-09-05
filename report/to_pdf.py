@@ -112,7 +112,7 @@ def build_pdf(sections: list[dict], charts: dict[str, bytes],
     pdf.ln(10)
     pdf.set_font(pdf.base, "", 10)
     pdf.set_text_color(*MUTED)
-    pdf.cell(0, 6, f"생성 {datetime.now().strftime('%Y-%m-%d %H:%M')}",
+    pdf.cell(0, 6, f"생성 {datetime.now(C.KST).strftime('%Y-%m-%d %H:%M')}",
              new_x="LMARGIN", new_y="NEXT")
 
     pdf.ln(20)

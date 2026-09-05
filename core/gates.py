@@ -30,9 +30,9 @@ GATES = {
 
 def new_run(dataset: str = C.DATASET) -> dict:
     return {
-        "run_id": datetime.now().strftime("%Y%m%d-%H%M%S"),
+        "run_id": datetime.now(C.KST).strftime("%Y%m%d-%H%M%S"),
         "dataset": dataset,
-        "started_at": datetime.now().isoformat(timespec="seconds"),
+        "started_at": datetime.now(C.KST).isoformat(timespec="seconds"),
         "step": 0,
         "log": [],
         "gates": {},
@@ -42,7 +42,7 @@ def new_run(dataset: str = C.DATASET) -> dict:
 
 def log(run: dict, msg: str, level: str = "ok") -> None:
     run["log"].append({
-        "at": datetime.now().strftime("%H:%M:%S"),
+        "at": datetime.now(C.KST).strftime("%H:%M:%S"),
         "msg": msg, "level": level,
     })
 
@@ -54,7 +54,7 @@ def advance(run: dict, to_step: str) -> None:
 def pass_gate(run: dict, n: int, note: str = "", by: str = "사용자") -> None:
     """게이트 통과를 기록한다. 되돌릴 수 없는 게이트는 여기서 확정된다."""
     run["gates"][str(n)] = {
-        "passed_at": datetime.now().isoformat(timespec="seconds"),
+        "passed_at": datetime.now(C.KST).isoformat(timespec="seconds"),
         "by": by, "note": note,
         "reversible": GATES[n]["reversible"],
     }
