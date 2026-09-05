@@ -41,9 +41,18 @@ def use_korean_font() -> str:
     return name
 
 
-# funnel_png(5단계 고정, 3.4in)과 device_png(부서 수에 따라 최대 4.2in)가
-# 나란히 보일 때 높이가 달라 보였다 — 둘의 평균으로 고정해 높이를 맞춘다.
-BOTTLENECK_CHART_H = (3.4 + 4.2) / 2  # = 3.8in
+# 전체 틀 높이만 맞추면(이전 BOTTLENECK_CHART_H 고정값) 막대 수가 다른 두
+# 차트(퍼널 5개 vs 부서 13개)의 막대 하나하나 두께가 달라 보인다 — 이번엔
+# "막대 1개당 두께"를 통일한다: 높이 = 막대 수 * BAR_UNIT_H + MARGIN_H.
+# 부서(13개) 기준 절충값(~6.5in, 페이지 전체는 아니지만 눈에 띄게 커짐)으로
+# 단위를 잡았고, 그 결과 퍼널(5개)은 지금(3.8in)보다 오히려 작아진다
+# (~3.0in) — 막대 두께를 맞추면 카테고리가 적은 차트가 작아지는 게 당연하다.
+BAR_UNIT_H = 0.44   # 인치, 막대 1개당
+MARGIN_H = 0.8      # 인치, 라벨·여백
+
+
+def _bar_chart_h(n: int) -> float:
+    return BAR_UNIT_H * n + MARGIN_H
 
 
 def _png(fig) -> bytes:
@@ -56,7 +65,7 @@ def _png(fig) -> bytes:
 
 def funnel_png(f) -> bytes:
     use_korean_font()
-    fig, ax = plt.subplots(figsize=(7.2, BOTTLENECK_CHART_H))
+    fig, ax = plt.subplots(figsize=(7.2, _bar_chart_h(len(f))))
     colors = [C.COLORS["block"] if b else C.BRAND["primary"] for b in f.is_bottleneck]
     y = range(len(f))
     ax.barh(list(y), f.n, color=colors, height=0.62)
@@ -80,10 +89,9 @@ def funnel_png(f) -> bytes:
 def device_png(g) -> bytes:
     use_korean_font()
     g = g.sort_values("전환율")
-    # funnel_png 와 나란히 놓였을 때 높이가 달라 보이지 않도록 같은 고정
-    # 높이(BOTTLENECK_CHART_H)를 쓴다 — 카테고리 수와 무관하다. 이제 옆에
-    # 정확한 수치 표가 있어, 차트는 상대 비교용 보조 시각 자료면 된다.
-    fig, ax = plt.subplots(figsize=(7.2, BOTTLENECK_CHART_H))
+    # funnel_png 와 막대 두께가 같아 보이도록 같은 단위(_bar_chart_h)를 쓴다 —
+    # 카테고리가 많을수록(부서 등) 전체 높이는 그만큼 커진다.
+    fig, ax = plt.subplots(figsize=(7.2, _bar_chart_h(len(g))))
     colors = [C.COLORS["block"] if v == g.전환율.min() else C.BRAND["primary"]
               for v in g.전환율]
     y = range(len(g))
