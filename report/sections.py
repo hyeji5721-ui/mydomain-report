@@ -228,34 +228,41 @@ def _s5_experiments(t: dict) -> dict:
     감춘 값이므로, 여기서도 reason 문장만 적고 primary·guardrail 의 실제
     값(퍼센트)은 쓰지 않는다.
 
+    2026-09-05: 코호트별 문장 나열을 표(tables)로 바꿨다 — 4장과 표기를
+    맞췄다. 전/후/증감을 한 칸에 문자열로 합쳐서(예: "76.07% → 69.49%
+    (-6.58%p)") 넣는다 — 세 칸으로 쪼개면 코호트마다 6개 숫자 칸이 생겨
+    "사유" 문장 하나 놓을 자리가 더 좁아진다. 감춘 코호트는 이 칸에 "-"만
+    넣고 사유 칸만 채운다.
+
     실험이 없으므로 **"인과를 주장할 수 없다"를 첫 문단(본문)에 남긴다** — 각주가
     아니다.
     """
     HIDDEN_VERDICTS = {"가드레일 없음", "효과 없음"}
     cards = M.cohort_cards(t)
 
-    lines = []
+    rows = []
     for r in cards:
-        head = f"- {r['base']} → {r['comp']} 코호트 · 판정 \"{r['verdict']}\""
+        cohort = f"{r['base']} → {r['comp']}"
         if r["verdict"] in HIDDEN_VERDICTS:
-            lines.append(f"{head}\n  {r['reason']}")
+            rows.append({"코호트": cohort, "판정": r["verdict"],
+                        "전체 통과율": "-", "계획-실적 괴리율": "-",
+                        "사유": r["reason"]})
             continue
         p, g = r["primary"], r["guardrail"]
-        line = (f"{head}\n"
-                f"  {p['name']} {p['base']:.2f}% → {p['comp']:.2f}% "
-                f"({p['delta']:+.2f}%p)")
-        if g:
-            line += (f" · {g['name']} {g['base']:.2f}%p → {g['comp']:.2f}%p "
-                     f"({g['delta']:+.2f}%p)")
-        line += f"\n  {r['reason']}"
-        lines.append(line)
+        primary_str = f"{p['base']:.2f}% → {p['comp']:.2f}% ({p['delta']:+.2f}%p)"
+        guard_str = (f"{g['base']:.2f}%p → {g['comp']:.2f}%p ({g['delta']:+.2f}%p)"
+                    if g else "-")
+        rows.append({"코호트": cohort, "판정": r["verdict"],
+                    "전체 통과율": primary_str, "계획-실적 괴리율": guard_str,
+                    "사유": r["reason"]})
 
     body = (
         "이 도메인에는 A/B 실험(무작위 배정)이 없습니다. 아래는 연도 코호트를 "
         "앞뒤로 이은 전후 비교이고, 무작위 배정이 아니므로 인과를 주장할 수 "
-        "없습니다.\n\n" + "\n".join(lines)
+        "없습니다."
     )
-    return {"title": "5. 실험", "kind": "auto", "body": body}
+    return {"title": "5. 실험", "kind": "auto", "body": body,
+            "tables": [{"caption": "연도 코호트 전후 비교", "rows": rows}]}
 
 
 # 사람이 st.data_editor 에서 "출처" 를 고르는 칸. 3개뿐이다 — 한계는 이
