@@ -149,7 +149,7 @@ if run["step"] >= 3 and not gates.is_passed(run, 1):
     st.markdown(body, unsafe_allow_html=True)
 
     note = st.text_input("판단 근거 (기록에 남습니다, 필수)",
-                         placeholder="예: 기존 고객은 퍼널 이력이 없는 것이 정상이므로 진행")
+                         placeholder="예: 날짜 결측 38행은 이미 알려진 오래된 기록 누락이라 진행")
     a, b = st.columns([1, 1])
     with a:
         if st.button("되돌리기"):
@@ -208,7 +208,7 @@ if gates.is_passed(run, 1) and not gates.is_passed(run, 2):
                 f'확인하십시오. 되돌릴 수 있습니다.</div></div>',
                 unsafe_allow_html=True)
     note2 = st.text_input("판단 근거 (필수)", key="g2",
-                          placeholder="예: 전환율 3.72%는 직전 분기와 유사")
+                          placeholder="예: 전체 통과율 74.92%는 예년과 비슷한 수준이라 진행")
     a, b = st.columns([1, 1])
     with a:
         if st.button("되돌리기", key="r2"):
