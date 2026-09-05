@@ -152,55 +152,46 @@ with body:
             st.image(pdf_charts.experiments_png(M.experiment_results(t)),
                      width="stretch")
     else:
-        # 세 장을 st.form 하나로 묶는다. 폼 밖의 개별 text_area 는 글자 하나
-        # 칠 때마다 전체 화면을 다시 돌린다 — 폼 안에서는 "저장"을 눌러야만
-        # 다시 돈다. 어느 사람 작성 장을 보고 있어도 셋을 한 번에 고친다.
-        human_secs = {s["title"]: s for s in secs if s["kind"] == "human"}
-        with st.form("사람이 쓰는 장"):
-            drafts = {}
-            for title in ["2. 배경", "6. 해석", "8. 제안"]:
-                hs = human_secs[title]
-                st.markdown(f"**{title}**")
-                if hs.get("guide"):
-                    ui.callout("<b>참고 가이드</b><br>" +
-                               "<br>".join(f"· {line}" for line in hs["guide"]),
-                               "info")
-                if hs.get("guide_disclaimer"):
-                    ui.callout(hs["guide_disclaimer"])
-                # 예시 문장을 박스 초기값으로 넣는다(내용이 비어 있을 때만 —
-                # 이미 쓴 내용을 덮어쓰지 않는다). [ ] 로 남겨둔 판단 부분은
-                # 지우지 않고 그대로 제출하면 예시가 리포트에 그대로 실린다 —
-                # 저장 전에 반드시 괄호를 채우거나 지워야 한다.
-                drafts[title] = st.text_area(
-                    title, value=hs["body"] or hs.get("example", ""), height=200,
-                    placeholder=hs["placeholder"], key=f"form_{title}",
-                    label_visibility="collapsed")
-                st.divider()
+        # 2026-09-05: 세 장(2·6·8)을 한 폼에 묶어 어느 장을 보든 셋 다 뜨던
+        # 것을, 지금 선택된 장 하나만 뜨도록 바꿨다 — 목차에서 "2. 배경"을
+        # 고르면 2장만 보이는 게 자연스럽다는 지적. 폼은 여전히 쓴다(글자
+        # 하나 칠 때마다 전체 화면이 도는 것을 막으려고) — 다만 이제 장
+        # 하나짜리 폼이라, "저장"은 지금 보고 있는 장 하나만 저장한다.
+        hs = sec
+        with st.form(f"사람이 쓰는 장_{hs['title']}"):
+            if hs.get("guide"):
+                ui.callout("<b>참고 가이드</b><br>" +
+                           "<br>".join(f"· {line}" for line in hs["guide"]),
+                           "info")
+            if hs.get("guide_disclaimer"):
+                ui.callout(hs["guide_disclaimer"])
+            # 예시 문장을 박스 초기값으로 넣는다(내용이 비어 있을 때만 —
+            # 이미 쓴 내용을 덮어쓰지 않는다). [ ] 로 남겨둔 판단 부분은
+            # 지우지 않고 그대로 제출하면 예시가 리포트에 그대로 실린다 —
+            # 저장 전에 반드시 괄호를 채우거나 지워야 한다.
+            draft = st.text_area(
+                hs["title"], value=hs["body"] or hs.get("example", ""),
+                height=240, placeholder=hs["placeholder"],
+                key=f"form_{hs['title']}", label_visibility="collapsed")
             submitted = st.form_submit_button("저장", type="primary")
 
         if submitted:
-            st.session_state.human.update(drafts)
+            st.session_state.human[hs["title"]] = draft
             # 걸려도 저장은 한다 — 저장을 막는 검증이 아니라 사람이 쓴 뒤
             # 스스로 다시 보게 하는 경고다(check_phrasing() 과 같은 자리).
-            flagged = {title: S.check_phrasing(text)
-                      for title, text in drafts.items() if S.check_phrasing(text)}
-            unresolved = {title: S.check_placeholders(text)
-                         for title, text in drafts.items() if S.check_placeholders(text)}
+            flagged = S.check_phrasing(draft)
+            unresolved = S.check_placeholders(draft)
             msgs = []
             if flagged:
-                detail = " / ".join(f"{title}: {', '.join(words)}"
-                                    for title, words in flagged.items())
-                msgs.append(f"인과를 단정하는 표현이 있습니다 — {detail}. "
+                msgs.append(f"인과를 단정하는 표현이 있습니다 — {', '.join(flagged)}. "
                            f"관측 데이터로는 인과를 주장할 수 없습니다.")
             if unresolved:
-                detail = " / ".join(f"{title}: {len(items)}곳"
-                                    for title, items in unresolved.items())
-                msgs.append(f"예시 문장의 [ ] 자리가 안 채워졌습니다 — {detail}. "
+                msgs.append(f"예시 문장의 [ ] 자리가 안 채워졌습니다 — {len(unresolved)}곳. "
                            f"그대로 두면 리포트에 대괄호가 그대로 실립니다.")
             if msgs:
                 ui.callout("저장했습니다. 다만 " + " ".join(msgs))
             else:
-                st.success("저장했습니다. 세 장 모두 검사 통과.")
+                st.success("저장했습니다. 검사 통과.")
 
 # ── 내보내기 ──────────────────────────────────────────────────────
 st.divider()
