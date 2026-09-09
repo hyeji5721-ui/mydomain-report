@@ -258,6 +258,14 @@ is_bottleneck  step_rate 가 가장 낮은 구간
 
 ---
 
+## 제안서 (`report/proposal.py`)
+
+- `report/proposal.py` 는 `report/sections.py` 와 같은 자동/사람 분리 원칙을 따른다
+- 자동 절에 카드에 없는 값을 채워 넣지 않는다. 없으면 `todo` 로 남긴다
+- 문장 검사(`check_phrasing`)를 새로 만들지 않고 `sections.py` 것을 재사용한다
+
+---
+
 ## 아직 안 정한 것 (`미정` 모음)
 
 - 지표 갱신 주기
