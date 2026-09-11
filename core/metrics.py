@@ -969,3 +969,242 @@ def channel_efficiency(t: dict) -> pd.DataFrame:
     todo("Day3 선택 과제", "채널 효율",
          "내 도메인에 획득 경로 구분이 있습니까? 비용이 없으면 투입 공수로 바꾸십시오.",
          "core/metrics.py  channel_efficiency()")
+
+
+# ── 제안서 주제 (9W Day3) ─────────────────────────────────────────
+def _annual_years() -> float:
+    """config.PERIOD 의 기간을 연 단위로. datetime.now() 를 쓰지 않는다 —
+    같은 입력(PERIOD)이면 언제 실행해도 같은 값이 나와야 한다."""
+    days = (pd.Timestamp(C.PERIOD[1]) - pd.Timestamp(C.PERIOD[0])).days
+    return days / 365.25
+
+
+@st.cache_data(show_spinner=False)
+def proposal_topics(t: dict) -> list[dict]:
+    """제안서 주제 후보. **하나만 고르지 않고 뽑을 수 있는 만큼 뽑는다**
+    (9W Day3 판단 기준 ④) — 발견 하나로 제안서 하나를 만들면, 그날 눈에 띈
+    것이 그대로 우선순위가 되어 버린다.
+
+    후보가 나오는 곳 넷:
+        ① 퍼널 구간  전환율이 가장 낮은 구간과 그다음으로 낮은 구간의 격차
+        ② 분해 축    config.FUNNEL_DIMS 각 축에서 최고 칸과 최저 칸의 격차
+                     (①과 같은 병목 구간을 그 축으로 쪼갠 것)
+        ③ 임계값     config.THRESHOLDS 를 벗어난 지표
+        ④ 추세      monthly() 최근 3개 코호트 평균이 직전 3개보다 나빠진 지표
+
+    후보 하나의 모양(과제 명세 + 조회용 내부 필드):
+        {"키","제목","한줄","규모_연간건수","근거축","구간","기각사유",
+         "구간_from","구간_to","지표","가정"}
+
+    ★ 규모 = 격차 × 비중 × 연간 건수. 연도 수는 config.PERIOD 에서 계산한다
+      (_annual_years) — datetime.now() 를 쓰지 않는다.
+    ★ 격차가 작아 기각된 후보도 남긴다. 기준은 새로 안 만들고
+      config.MOVE_THRESHOLD(6.0%p — 전후 비교에서 "이만큼은 움직여야 신호로
+      본다"고 이미 정한 값)를 빌려 쓴다. 지우지 않고 "기각사유"만 채운다.
+    ★ 못 믿을 조건(config.MIN_CELL_SAMPLE 미만 칸)에 걸린 축은 애초에
+      후보로 만들지 않는다 — funnel_by() 가 그 칸을 이미 빼고 돌려주므로,
+      비교할 칸이 2개 미만이면 그 축은 건너뛴다. 기각과는 다르다 — 기각은
+      "비교했는데 격차가 작다", 이쪽은 "비교 자체가 안 된다".
+    """
+    years = _annual_years()
+    pl = t["plans"]
+    candidates: list[dict] = []
+
+    f = funnel(t["plan_stage_events"])
+    rated = f.dropna(subset=["step_rate"]).reset_index(drop=True)
+
+    # ① 퍼널 구간 — 가장 낮은 전환율 구간 vs 그다음으로 낮은 구간
+    bottleneck_from = bottleneck_to = None
+    if len(rated) >= 1:
+        worst = rated.sort_values("step_rate").iloc[0]
+        idx_all = f.index[f.step == worst.step][0]
+        bottleneck_from = f.step.iloc[idx_all - 1]
+        bottleneck_to = worst.step
+        n_from = int(f.n.iloc[idx_all - 1])
+        if len(rated) >= 2:
+            second = rated.sort_values("step_rate").iloc[1]
+            gap = float(second.step_rate - worst.step_rate)
+        else:
+            gap = 0.0
+        annual = round(gap * n_from / years) if years else 0
+        gap_pp = gap * 100
+        candidates.append({
+            "키": "funnel_bottleneck",
+            "제목": f"{C.FUNNEL_LABELS.get(bottleneck_from, bottleneck_from)} → "
+                   f"{C.FUNNEL_LABELS.get(bottleneck_to, bottleneck_to)} 구간 전환율 격차",
+            "한줄": f"이 구간 전환율 {worst.step_rate*100:.2f}%"
+                   f"({int(worst.n)}/{n_from}건) — 다음으로 낮은 구간보다 "
+                   f"{gap_pp:.2f}%p 낮음",
+            "규모_연간건수": annual,
+            "근거축": "퍼널",
+            "구간": f"{C.FUNNEL_LABELS.get(bottleneck_from, bottleneck_from)} → "
+                   f"{C.FUNNEL_LABELS.get(bottleneck_to, bottleneck_to)}",
+            "구간_from": bottleneck_from, "구간_to": bottleneck_to,
+            "지표": None,
+            "가정": [f"격차({gap_pp:.2f}%p) × 이 구간 도달 {n_from}건 ÷ "
+                   f"관측기간 {years:.2f}년으로 연간 건수를 환산했다"],
+            "기각사유": (None if gap_pp >= C.MOVE_THRESHOLD else
+                       f"다음 구간과 격차 {gap_pp:.2f}%p 로 기준({C.MOVE_THRESHOLD}%p) 미만"),
+        })
+
+    # ② 분해 축 — ①과 같은 병목 구간을 각 축으로 쪼갠다
+    if bottleneck_from and bottleneck_to:
+        for dim in C.FUNNEL_DIMS:
+            g = funnel_by(t, dim, bottleneck_from, bottleneck_to)
+            if len(g) < 2:
+                continue   # 못 믿을 조건 — 비교할 칸이 2개 미만이면 후보 자체가 안 됨
+            best = g.loc[g.전환율.idxmax()]
+            worst_c = g.loc[g.전환율.idxmin()]
+            gap = float(best.전환율 - worst_c.전환율)
+            gap_pp = gap * 100
+            annual = round(gap * int(worst_c.도달) / years) if years else 0
+            candidates.append({
+                "키": f"dim_{dim}",
+                "제목": f"{C.FUNNEL_DIM_LABELS.get(dim, dim)} 축 전환율 격차 "
+                       f"({best[dim]}↔{worst_c[dim]})",
+                "한줄": f"{best[dim]} {best.전환율*100:.2f}%, "
+                       f"{worst_c[dim]} {worst_c.전환율*100:.2f}%로 "
+                       f"{gap_pp:.2f}%p 벌어짐",
+                "규모_연간건수": annual,
+                "근거축": dim,
+                "구간": f"{C.FUNNEL_LABELS.get(bottleneck_from, bottleneck_from)} → "
+                       f"{C.FUNNEL_LABELS.get(bottleneck_to, bottleneck_to)}",
+                "구간_from": bottleneck_from, "구간_to": bottleneck_to,
+                "지표": None,
+                "가정": [f"격차({gap_pp:.2f}%p) × 최저 칸({worst_c[dim]}) 도달 "
+                       f"{int(worst_c.도달)}건 ÷ 관측기간 {years:.2f}년으로 "
+                       f"연간 건수를 환산했다 — 최저 칸이 최고 칸 수준까지 "
+                       f"좁혀진다고 가정한 값이다"],
+                "기각사유": (None if gap_pp >= C.MOVE_THRESHOLD else
+                           f"최고·최저 칸 격차 {gap_pp:.2f}%p 로 기준({C.MOVE_THRESHOLD}%p) 미만"),
+            })
+
+    # ③ 임계값 — config.THRESHOLDS 를 벗어난 지표
+    k = kpis(t)
+    for name, v in k.items():
+        status = status_of(name, v["value"])
+        if status not in ("warn", "block"):
+            continue
+        th = C.THRESHOLDS[name]
+        higher_worse = name in C.HIGHER_IS_WORSE
+        gap_pp = (v["value"] - th["경고"]) if higher_worse else (th["경고"] - v["value"])
+        n_total = len(pl)
+        annual = round(abs(gap_pp) / 100 * n_total / years) if years else 0
+        candidates.append({
+            "키": f"kpi_{name}",
+            "제목": f"{name} 임계값 이탈",
+            "한줄": f"{name} {v['fmt'].format(v['value'])} — 경고선 대비 "
+                   f"{gap_pp:+.2f}%p 벗어남",
+            "규모_연간건수": annual,
+            "근거축": "임계값",
+            "구간": None, "구간_from": None, "구간_to": None,
+            "지표": name,
+            "가정": [f"격차({abs(gap_pp):.2f}%p)를 전체 {n_total}건에 균등 "
+                   f"적용했다고 가정해 ÷ {years:.2f}년으로 연간 건수를 환산했다"],
+            "기각사유": None,   # 임계값을 벗어난 것 자체가 이미 기준을 넘은 것이다
+        })
+
+    # ④ 추세 — 최근 3개 코호트 평균이 직전 3개보다 나빠진 지표
+    m = monthly(t)
+    for col in m.columns:
+        s = m[col].dropna()
+        if len(s) < 6:
+            continue   # 비교할 만큼 코호트가 없다 — 후보 자체가 안 됨
+        recent, prior = s.iloc[-3:], s.iloc[-6:-3]
+        higher_worse = col in C.HIGHER_IS_WORSE
+        worse = (recent.mean() < prior.mean() if not higher_worse
+                else recent.mean() > prior.mean())
+        if not worse:
+            continue
+        gap_pp = abs(recent.mean() - prior.mean())
+        n_total = len(pl)
+        annual = round(gap_pp / 100 * n_total / years) if years else 0
+        candidates.append({
+            "키": f"trend_{col}",
+            "제목": f"{col} 최근 코호트 하락",
+            "한줄": f"최근 3개 코호트 평균 {recent.mean():.2f} vs 직전 3개 "
+                   f"{prior.mean():.2f} — {gap_pp:.2f}%p 하락",
+            "규모_연간건수": annual,
+            "근거축": "추세",
+            "구간": None, "구간_from": None, "구간_to": None,
+            "지표": col,
+            "가정": [f"하락폭({gap_pp:.2f}%p)을 전체 {n_total}건에 균등 적용해 "
+                   f"÷ {years:.2f}년으로 연간 건수를 환산했다"],
+            "기각사유": (None if gap_pp >= C.MOVE_THRESHOLD else
+                       f"하락폭 {gap_pp:.2f}%p 로 기준({C.MOVE_THRESHOLD}%p) 미만"),
+        })
+
+    candidates.sort(key=lambda c: (c["기각사유"] is not None, -c["규모_연간건수"]))
+    return candidates
+
+
+@st.cache_data(show_spinner=False)
+def topic_evidence(t: dict, topic: dict) -> dict:
+    """주제 하나에 대해 제안서가 쓸 근거를 한 번에 모아 돌려준다.
+
+    **이 함수는 조회만 한다 — 문장을 만들지 않는다.** 없는 것은 지어내지
+    않고 None 으로 두되, 왜 없는지 "<키>_사유"에 이유를 넣는다. 실측과
+    환산값은 같은 항목에 섞지 않도록 키를 나눈다("규모"의 연간건수는 환산값,
+    "현황"·"원인"은 실측이다).
+
+    반환:
+        현황  퍼널 전체 (단계 · 도달 · 전환율 · 병목 표시)
+        원인  이 주제의 분해 축 표 (칸 · 도달 · 전환 · 전환율 · 비중 · 최고/최저)
+              — 이 주제가 분해 축에서 오지 않았으면 None + 사유
+        규모  연간 건수 + 환산에 쓴 가정 목록(topic 이 이미 계산해 둔 값을
+              그대로 옮긴다 — 여기서 다시 계산하지 않는다)
+        추세  관련 지표의 최근 코호트 값(monthly()). 관련 지표가 없으면
+              None + 사유
+    """
+    ev: dict = {}
+
+    f = funnel(t["plan_stage_events"])
+    ev["현황"] = [
+        {"단계": r.label, "도달": int(r.n),
+         "전환율": None if pd.isna(r.step_rate) else round(float(r.step_rate) * 100, 2),
+         "병목": bool(r.is_bottleneck)}
+        for r in f.itertuples()
+    ]
+
+    dim = topic.get("근거축")
+    step_from, step_to = topic.get("구간_from"), topic.get("구간_to")
+    # "퍼널 구간" 주제(근거축="퍼널")는 그 자체로는 분해 축이 없다 — 같은
+    # 구간을 판정 축(FUNNEL_DIMS 의 첫째, department_name)으로 기본
+    # 분해해서 보여준다. report/sections.py 의 _bottleneck_by_department() 와
+    # 같은 선택이다.
+    if dim not in C.FUNNEL_DIMS and step_from and step_to:
+        dim = C.FUNNEL_DIMS[0]
+    if dim in C.FUNNEL_DIMS and step_from and step_to:
+        g = funnel_by(t, dim, step_from, step_to)
+        if len(g):
+            best_v, worst_v = g.전환율.max(), g.전환율.min()
+            ev["원인"] = {"축": dim, "칸": [
+                {dim: str(getattr(r, dim)), "도달": int(r.도달), "전환": int(r.전환),
+                 "전환율": round(float(r.전환율) * 100, 2),
+                 "비중": round(float(r.비중) * 100, 2),
+                 "표시": ("최고" if r.전환율 == best_v
+                        else "최저" if r.전환율 == worst_v else "")}
+                for r in g.itertuples()
+            ]}
+        else:
+            ev["원인"], ev["원인_사유"] = None, (
+                f"{C.FUNNEL_DIM_LABELS.get(dim, dim)} 축은 표본이 충분한 칸이 없다")
+    else:
+        ev["원인"], ev["원인_사유"] = None, (
+            "이 주제는 지표 수준 이슈라 분해 축 비교가 없다")
+
+    ev["규모"] = {"연간건수": topic.get("규모_연간건수"),
+                 "가정": topic.get("가정", [])}
+
+    kpi_name = topic.get("지표")
+    if kpi_name:
+        m = monthly(t)
+        if kpi_name in m.columns:
+            s = m[kpi_name].dropna().tail(12)
+            ev["추세"] = [{"기간": idx, "값": round(float(v), 2)} for idx, v in s.items()]
+        else:
+            ev["추세"], ev["추세_사유"] = None, f"{kpi_name} 열이 monthly() 에 없다"
+    else:
+        ev["추세"], ev["추세_사유"] = None, "이 주제는 코호트 추세와 무관하다"
+
+    return ev
