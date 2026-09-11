@@ -133,8 +133,9 @@ def _sentence_규모(topic: dict) -> str:
     if n is None:
         return ""
     가정 = " · ".join(topic.get("가정", []))
-    return (f'<span class="lab est">추정</span> 연 {n}건 규모로 추산됩니다.'
-           + (f' ({가정})' if 가정 else ""))
+    return (f'<span class="lab est">추정</span> 연 {n}건'
+           + (f'({가정})' if 가정 else "")
+           + ' 규모로 추산됩니다.')
 
 
 def _build_현황(topic, evidence, cards, human, title, question, kind):
@@ -146,6 +147,11 @@ def _build_현황(topic, evidence, cards, human, title, question, kind):
                    f'{본["도달"]:,}건입니다.')
     if topic.get("한줄"):
         문장.append(f'<span class="lab obs">관측</span> {topic["한줄"]}.')
+    th = C.THRESHOLDS.get(topic.get("지표"))
+    if th:
+        방향 = "초과" if topic.get("지표") in C.HIGHER_IS_WORSE else "미만"
+        문장.append(f'<span class="lab obs">관측</span> 임계값은 경고 {th["경고"]}·'
+                   f'위험 {th["위험"]}({방향} 기준)입니다.')
     body = " ".join(문장)
     return {"제목": title, "질문": question, "kind": kind, "문장": body,
            "차트": ("funnel", steps), "표": None}
@@ -191,10 +197,10 @@ def _build_제안(topic, evidence, cards, human, title, question, kind):
                "차트": None, "표": None, "카드": None}
     cls_word = _word(_CLASS_WORD_KEY.get(card.get("분류", ""), ""))
     문장 = (f'<b>{_strip_code(card.get("title", ""))}</b> — {cls_word}<br>'
+           f'되돌림: {_strip_code(card.get("되돌림", ""))}<br>'
            f'근거: {_strip_code(card.get("근거", ""))}<br>'
            f'비용: {_strip_code(card.get("비용", "")) or _word("확인_필요")}<br>'
-           f'효과: {_strip_code(card.get("효과", ""))}<br>'
-           f'되돌림: {_strip_code(card.get("되돌림", ""))}')
+           f'효과: {_strip_code(card.get("효과", ""))}')
     return {"제목": title, "질문": question, "kind": kind, "문장": 문장,
            "차트": None, "표": None, "카드": card}
 
