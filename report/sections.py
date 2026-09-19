@@ -609,7 +609,7 @@ def email_draft(t: dict, sections: list[dict]) -> dict:
     받을 사람이 없으면 초안까지만 만들고, 게이트 3은 "보냈다고 치고" 기록만 남긴다.
     """
     summary = next((s["body"] for s in sections if s["title"].startswith("1.")), "")
-    subject = f"[성장 리포트] {C.PERIOD[0][:7]}~{C.PERIOD[1][:7]}"
+    subject = f"[{C.REPORT_TITLE}] {C.PERIOD[0][:7]}~{C.PERIOD[1][:7]}"
     html = (
         f'<div style="font-family:sans-serif;color:#0f172a;max-width:640px">'
         f'<h2 style="font-size:18px">{subject}</h2>'

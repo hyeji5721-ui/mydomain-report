@@ -89,7 +89,7 @@ class Report(FPDF):
 
 
 def build_pdf(sections: list[dict], charts: dict[str, bytes],
-              title: str = "성장 성과 분석") -> bytes:
+              title: str = C.REPORT_TITLE) -> bytes:
     pdf = Report()
 
     # ── 표지 + 목차 (한 페이지) ──────────────────────────────────────
